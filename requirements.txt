@@ -1,7 +1,3 @@
-# requirements.txt
-requests
-beautifulsoup4
-google-genai # For the Gemini API
-# You will need a Sanity client library, which might be easier 
-# to handle with Node.js/JavaScript, but we'll stick to Python for now
-# and use requests for the Sanity HTTP API if a Python client isn't available.
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+google-genai>=0.3.0
