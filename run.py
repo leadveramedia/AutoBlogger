@@ -28,6 +28,8 @@ from auto_post import (
     post_to_sanity,
     load_title_list,
     save_title_list,
+    load_used_topics,
+    add_used_topic,
 )
 from auto_post.config import GEMINI_API_KEY, SANITY_PROJECT_ID, SANITY_TOKEN
 
@@ -61,12 +63,15 @@ def main():
         print("No articles scraped from any source. Exiting.")
         return
 
-    # Step 2: Select Best Articles (must be from today and match mission criteria)
-    print("\n--- Step 2: Selecting Articles (filtering for today's news) ---")
-    selected_articles = select_best_articles(all_news, num_articles=2)
+    # Step 2: Load used topics and select best articles
+    print("\n--- Step 2: Selecting Articles (filtering for today's news and avoiding duplicates) ---")
+    used_topics = load_used_topics()
+    print(f"Loaded {len(used_topics)} previously covered topics to avoid duplicates")
+
+    selected_articles = select_best_articles(all_news, num_articles=2, used_topics=used_topics)
 
     if not selected_articles:
-        print("No suitable articles from today found that match our criteria. Exiting.")
+        print("No suitable NEW articles from today found that match our criteria. Exiting.")
         print("The script will try again tomorrow when fresh news is available.")
         return
 
@@ -113,6 +118,11 @@ def main():
 
         if success:
             success_count += 1
+            # Track this topic to avoid duplicates in future runs
+            topic_summary = selected_article.get('topic_summary', selected_article.get('title', '')[:100])
+            if topic_summary:
+                add_used_topic(topic_summary)
+                print(f"  Added topic to tracking: {topic_summary[:50]}...")
         else:
             fail_count += 1
 

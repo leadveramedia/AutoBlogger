@@ -30,6 +30,9 @@ REQUEST_HEADERS = {
 # --- PRE-DEFINED TITLES ---
 TITLES_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'titles.json')
 
+# --- USED TOPICS TRACKING (prevents duplicate blog posts about same news story) ---
+USED_TOPICS_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'used_topics.json')
+
 # --- NEWS SOURCES ---
 NEWS_SOURCES = [
     {

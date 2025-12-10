@@ -7,7 +7,7 @@ import re
 import json
 import uuid
 
-from .config import TITLES_FILE
+from .config import TITLES_FILE, USED_TOPICS_FILE
 
 
 def generate_key():
@@ -39,6 +39,41 @@ def save_title_list(titles):
     except Exception as e:
         print(f"Error saving titles.json: {e}")
         return False
+
+
+def load_used_topics():
+    """Load list of topics we've already blogged about."""
+    try:
+        with open(USED_TOPICS_FILE, 'r') as f:
+            data = json.load(f)
+            return data.get('topics', [])
+    except FileNotFoundError:
+        return []
+    except json.JSONDecodeError:
+        print("Warning: used_topics.json is invalid")
+        return []
+
+
+def save_used_topics(topics):
+    """Save updated list of used topics."""
+    try:
+        with open(USED_TOPICS_FILE, 'w') as f:
+            json.dump({'topics': topics}, f, indent=2)
+        print(f"Updated used_topics.json ({len(topics)} topics tracked)")
+        return True
+    except Exception as e:
+        print(f"Error saving used_topics.json: {e}")
+        return False
+
+
+def add_used_topic(topic_summary):
+    """Add a new topic to the used topics list."""
+    topics = load_used_topics()
+    topics.append(topic_summary)
+    # Keep last 500 topics to prevent file from growing too large
+    if len(topics) > 500:
+        topics = topics[-500:]
+    return save_used_topics(topics)
 
 
 def parse_inline_content(text):

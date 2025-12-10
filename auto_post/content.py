@@ -61,9 +61,10 @@ Requirements:
         return None
 
 
-def select_best_articles(news_items, num_articles=2):
+def select_best_articles(news_items, num_articles=2, used_topics=None):
     """
     Use Gemini AI to select the best articles for blog generation.
+    Filters out articles about topics we've already covered.
     """
     if not news_items:
         return []
@@ -89,12 +90,25 @@ def select_best_articles(news_items, num_articles=2):
     articles_json = json.dumps(articles_list, indent=2)
     today_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
 
+    # Format used topics for the prompt
+    used_topics_list = used_topics if used_topics else []
+    used_topics_text = ""
+    if used_topics_list:
+        used_topics_text = f"""
+**CRITICAL - TOPICS ALREADY COVERED (DO NOT SELECT):**
+We have already published blog posts about these topics. Do NOT select any article that covers the same story, event, case, or subject matter - even if from a different source or with a different angle:
+
+{chr(10).join('- ' + topic for topic in used_topics_list[-100:])}
+
+For example, if we already covered "Columbia University $21M antisemitism settlement", reject ANY article about that settlement regardless of the source or headline.
+"""
+
     prompt = f"""You are an editorial assistant for casevalue.law, a legal case evaluation website focused on educating potential clients about personal injury law, employment law, and mass tort litigation.
 
 Today's date: {today_date}
 
 Your task is to select the {num_articles} BEST articles from today's news to generate educational blog posts.
-
+{used_topics_text}
 **MANDATORY FILTER - MUST BE FROM TODAY:**
 Only consider articles that appear to be published TODAY ({today_date}). Reject articles that:
 - Reference events from previous days/weeks/months
@@ -113,18 +127,21 @@ If an article's headline suggests it's breaking news or a current development, i
 
 3. **Diversity**: Try to select articles from different topics/categories to provide variety in blog content.
 
+4. **Novelty**: Do NOT select articles about topics we've already covered (see list above if provided).
+
 **ARTICLES TO ANALYZE:**
 {articles_json}
 
 **OUTPUT REQUIREMENTS:**
 Return ONLY a JSON object with:
-- "selected_indices": An array of {num_articles} index numbers of the best articles (integers), ordered by preference. Use an empty array [] if no suitable articles from today were found.
+- "selected_indices": An array of {num_articles} index numbers of the best articles (integers), ordered by preference. Use an empty array [] if no suitable NEW articles from today were found.
+- "topic_summaries": An array of brief topic descriptions (10-15 words each) for each selected article, describing the specific case/event/story. Example: "Columbia University $21M antisemitism settlement EEOC case"
 - "reasoning": Brief explanation (1-2 sentences) of why these articles were selected
 
 Example output:
-{{"selected_indices": [3, 7], "reasoning": "Article 3 is an FDA recall with high visibility; Article 7 covers a major employment discrimination case."}}
+{{"selected_indices": [3, 7], "topic_summaries": ["FDA recall of contaminated infant formula by Abbott", "Amazon warehouse OSHA violations $1.5M fine"], "reasoning": "Article 3 is an FDA recall with high visibility; Article 7 covers a major workplace safety case."}}
 
-IMPORTANT: Return ONLY the JSON object, no additional text. Return empty array for selected_indices if no articles appear to be from today or meet the criteria."""
+IMPORTANT: Return ONLY the JSON object, no additional text. Return empty array for selected_indices if no articles appear to be from today, meet the criteria, or if all suitable articles cover topics we've already blogged about."""
 
     try:
         response = client.models.generate_content(
@@ -137,17 +154,21 @@ IMPORTANT: Return ONLY the JSON object, no additional text. Return empty array f
 
         result = json.loads(response.text.strip())
         selected_indices = result.get('selected_indices', [])
+        topic_summaries = result.get('topic_summaries', [])
         reasoning = result.get('reasoning', 'No reasoning provided')
 
         if not selected_indices:
-            print("Gemini found no suitable articles from today matching the criteria.")
+            print("Gemini found no suitable NEW articles from today matching the criteria.")
             print(f"Reasoning: {reasoning}")
             return []
 
         selected_articles = []
-        for idx in selected_indices:
+        for i, idx in enumerate(selected_indices):
             if 0 <= idx < len(news_items):
                 selected = news_items[idx]
+                # Attach topic summary to the article for later tracking
+                if i < len(topic_summaries):
+                    selected['topic_summary'] = topic_summaries[i]
                 print(f"Gemini selected article #{idx}: {selected.get('title', '')[:50]}...")
                 selected_articles.append(selected)
             else:
