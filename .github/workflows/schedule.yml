@@ -24,9 +24,17 @@ jobs:
       run: pip install -r requirements.txt
 
     - name: Run Automation Script
-      run: python auto_post.py
+      run: python run.py
       env:
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         SANITY_TOKEN: ${{ secrets.SANITY_TOKEN }}
         SANITY_PROJECT_ID: ${{ secrets.SANITY_PROJECT_ID }}
         SANITY_DATASET: ${{ secrets.SANITY_DATASET }}
+
+    - name: Commit updated titles.json
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add titles.json
+        git diff --staged --quiet || git commit -m "Update titles.json after blog generation"
+        git push
