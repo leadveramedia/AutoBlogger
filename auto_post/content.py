@@ -13,6 +13,44 @@ from google import genai
 from .config import GEMINI_API_KEY
 
 
+def sanitize_json_control_chars(s):
+    """
+    Fix control characters inside JSON string values.
+    Gemini sometimes outputs literal newlines/tabs inside JSON strings
+    which breaks json.loads(). This escapes them properly.
+    """
+    result = []
+    in_string = False
+    escape_next = False
+    for char in s:
+        if escape_next:
+            result.append(char)
+            escape_next = False
+            continue
+        if char == '\\':
+            result.append(char)
+            escape_next = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            result.append(char)
+            continue
+        if in_string:
+            if char == '\n':
+                result.append('\\n')
+            elif char == '\r':
+                result.append('\\r')
+            elif char == '\t':
+                result.append('\\t')
+            elif ord(char) < 32:
+                result.append(f'\\u{ord(char):04x}')
+            else:
+                result.append(char)
+        else:
+            result.append(char)
+    return ''.join(result)
+
+
 def generate_image_with_gemini(alt_text):
     """
     Generate an image using Imagen 4 model.
@@ -289,6 +327,8 @@ CRITICAL RULES:
                 json_string = re.sub(r'^```(?:json)?\s*\n?', '', json_string)
                 json_string = re.sub(r'\n?\s*```\s*$', '', json_string)
 
+            # Sanitize control characters in JSON string values
+            json_string = sanitize_json_control_chars(json_string)
             article_data = json.loads(json_string)
 
             # Enforce character limits programmatically
@@ -428,6 +468,8 @@ CRITICAL RULES:
                 json_string = re.sub(r'^```(?:json)?\s*\n?', '', json_string)
                 json_string = re.sub(r'\n?\s*```\s*$', '', json_string)
 
+            # Sanitize control characters in JSON string values
+            json_string = sanitize_json_control_chars(json_string)
             article_data = json.loads(json_string)
 
             # Enforce character limits programmatically
