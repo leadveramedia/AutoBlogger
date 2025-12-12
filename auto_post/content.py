@@ -255,27 +255,36 @@ Your task is to write an informative, engaging blog post based on the following 
 
 2. **excerpt**: Short summary for post listings and SEO. MAXIMUM 160 characters. Do NOT exceed 160.
 
-3. **body_markdown**: The main article content with EXACTLY 6 sections. Each section MUST have its own H2 (##) heading and be a FULL PARAGRAPH (4-6 sentences minimum):
+3. **body_markdown**: The main article content with EXACTLY 6 sections. Each section MUST have:
+   - A DYNAMIC, ENGAGING H2 (##) heading that describes the content (NOT generic titles like "News Summary" or "Liability Analysis")
+   - A FULL PARAGRAPH (4-6 sentences minimum)
 
-   **SECTION 1 - News Summary:** (one full paragraph)
-   Summarize what happened in the news article with brief editorialization and context. Include ONE natural link to the original news source (the "url" field from PRIMARY NEWS ARTICLE) using anchor text like "according to [recent reports](source-url)".
+   **SECTION 1 - What Happened:** (one full paragraph)
+   Create an engaging H2 title that captures the news event (e.g., "## Florida Files Discrimination Suit Against Starbucks" or "## Gas Explosion Rocks Bay Area Neighborhood").
+   Summarize what happened with brief editorialization and context. Include ONE natural link to the original news source using anchor text like "according to [recent reports](source-url)".
 
-   **SECTION 2 - Liability Analysis:** (one full paragraph)
-   Provide the lawyer's point of view on the liabilities in this event. Discuss who may be at fault and why, and explain legal theories that could apply (negligence, strict liability, etc.).
+   **SECTION 2 - Legal Liability:** (one full paragraph)
+   Create an H2 title about fault/liability (e.g., "## Who Bears Responsibility for the Explosion?" or "## Breaking Down the Discrimination Claims").
+   Provide the lawyer's point of view on liabilities. Discuss who may be at fault and why, and explain legal theories that could apply.
 
-   **SECTION 3 - What To Do If This Happens To You:** (one full paragraph)
-   Practical steps someone should take if they experience this type of event. Include advice on documentation, seeking medical attention, and preserving evidence. If relevant, link to existing articles using format [Anchor Text](https://casevalue.law/blog/exact-slug-from-database). Only use slugs from the INTERNAL LINK DATABASE.
+   **SECTION 3 - Steps to Take:** (one full paragraph)
+   Create an H2 title about taking action (e.g., "## Protecting Your Rights After a Similar Incident" or "## What to Do If You Face Workplace Discrimination").
+   Practical steps someone should take if they experience this type of event. If relevant, link to existing articles using format [Anchor Text](https://casevalue.law/blog/exact-slug-from-database).
 
-   **SECTION 4 - Expected Recovery and Settlements:** (one full paragraph)
-   Discuss common range of recovery and settlements for this type of event, factors that affect settlement amounts, and types of damages that may be recoverable (medical expenses, lost wages, pain and suffering, etc.).
+   **SECTION 4 - Compensation:** (one full paragraph)
+   Create an H2 title about recovery (e.g., "## What Victims Could Recover in Damages" or "## Understanding Settlement Ranges").
+   Discuss common recovery and settlement ranges, factors affecting amounts, and types of damages recoverable.
 
-   **SECTION 5 - Applicable Laws and Regulations:** (one full paragraph)
-   Cover laws or regulations that could apply in these types of events, relevant statutes of limitations, and state-specific considerations if applicable.
+   **SECTION 5 - Legal Framework:** (one full paragraph)
+   Create an H2 title about applicable laws (e.g., "## Federal Laws Protecting Workers from Discrimination" or "## Premises Liability Laws in California").
+   Cover relevant laws, regulations, statutes of limitations, and state-specific considerations.
 
-   **SECTION 6 - Take Action:** (one full paragraph)
-   Strong call-to-action directing readers to use our free case evaluator. Emphasize the importance of understanding their case value and encourage readers to get a professional evaluation.
+   **SECTION 6 - Get Help:** (one full paragraph)
+   Create an H2 title encouraging action (e.g., "## Find Out What Your Case Is Worth" or "## Take the First Step Toward Justice").
+   Strong call-to-action directing readers to use our free case evaluator.
 
    **Additional Requirements:**
+   - H2 headings must be DYNAMIC and SPECIFIC to the article content - never use generic titles
    - Each section MUST be a FULL PARAGRAPH (4-6 sentences minimum)
    - Optimized for SEO for a case evaluation website
    - Professional, informative tone empathetic to potential injury victims
@@ -310,7 +319,7 @@ Your task is to write an informative, engaging blog post based on the following 
     "title": "Compelling SEO-friendly headline for the blog post",
     "slug": "url-friendly-slug-here",
     "excerpt": "Max 160 chars. Count before submitting.",
-    "body_markdown": "## News Summary\\n\\nSummary of what happened...\\n\\n## Liability Analysis\\n\\nLegal perspective on fault...\\n\\n## What To Do If This Happens To You\\n\\nSteps to take...\\n\\n## Expected Recovery and Settlements\\n\\nTypical settlement ranges...\\n\\n## Applicable Laws and Regulations\\n\\nRelevant laws...\\n\\n## Take Action\\n\\nCall to action...",
+    "body_markdown": "## Florida Files Landmark Discrimination Suit\\n\\nFull paragraph about what happened...\\n\\n## Breaking Down the Legal Claims Against Starbucks\\n\\nFull paragraph on liability...\\n\\n## Protecting Your Rights in the Workplace\\n\\nFull paragraph on steps to take...\\n\\n## What Discrimination Victims Could Recover\\n\\nFull paragraph on settlements...\\n\\n## Federal and State Employment Laws at Play\\n\\nFull paragraph on laws...\\n\\n## Find Out What Your Case Is Worth\\n\\nFull paragraph call to action...",
     "meta_title": "Max 60 chars. Count before submitting.",
     "alt_text": "Descriptive alt text for featured image",
     "meta_description": "Max 160 chars. Count before submitting.",
@@ -322,7 +331,7 @@ CRITICAL RULES:
 - Return ONLY the JSON object, no additional text or markdown code fences.
 - HARD CHARACTER LIMITS - NEVER EXCEED: excerpt (max 160), meta_title (max 60), meta_description (max 160). Count each character before output. If over limit, shorten the text.
 - LINKS: ONLY use slugs from the INTERNAL LINK DATABASE. If the database shows "Slug: example-slug", use [text](https://casevalue.law/blog/example-slug). NO invented links. If no matching slug exists, use NO links.
-- Body must have EXACTLY 6 sections with ## headings: News Summary, Liability Analysis, What To Do, Expected Recovery, Applicable Laws, Take Action.
+- Body must have EXACTLY 6 sections, each with a DYNAMIC ## heading specific to the article content. DO NOT use generic headings like "News Summary" or "Liability Analysis".
 """
 
     max_retries = 2
@@ -356,6 +365,21 @@ CRITICAL RULES:
             if article_data.get('meta_description') and len(article_data['meta_description']) > 160:
                 article_data['meta_description'] = article_data['meta_description'][:157] + '...'
                 print(f"  Truncated meta_description to 160 chars")
+
+            # Fallback for missing required fields
+            if not article_data.get('alt_text'):
+                title = article_data.get('title', 'Legal news article')
+                article_data['alt_text'] = f"Professional image representing {title[:80]}"
+                print(f"  Generated fallback alt_text")
+            if not article_data.get('meta_title'):
+                article_data['meta_title'] = article_data.get('title', 'Legal News')[:57] + '...'
+                print(f"  Generated fallback meta_title")
+            if not article_data.get('keywords'):
+                article_data['keywords'] = ['personal injury', 'legal news', 'case evaluation']
+                print(f"  Generated fallback keywords")
+            if not article_data.get('categories'):
+                article_data['categories'] = ['legal-tips']
+                print(f"  Generated fallback categories")
 
             print(f"Generated article: {article_data.get('title', 'Untitled')}")
             return article_data
@@ -497,6 +521,21 @@ CRITICAL RULES:
             if article_data.get('meta_description') and len(article_data['meta_description']) > 160:
                 article_data['meta_description'] = article_data['meta_description'][:157] + '...'
                 print(f"  Truncated meta_description to 160 chars")
+
+            # Fallback for missing required fields
+            if not article_data.get('alt_text'):
+                title = article_data.get('title', 'Legal news article')
+                article_data['alt_text'] = f"Professional image representing {title[:80]}"
+                print(f"  Generated fallback alt_text")
+            if not article_data.get('meta_title'):
+                article_data['meta_title'] = article_data.get('title', 'Legal News')[:57] + '...'
+                print(f"  Generated fallback meta_title")
+            if not article_data.get('keywords'):
+                article_data['keywords'] = ['personal injury', 'legal news', 'case evaluation']
+                print(f"  Generated fallback keywords")
+            if not article_data.get('categories'):
+                article_data['categories'] = ['legal-tips']
+                print(f"  Generated fallback categories")
 
             print(f"Generated article: {article_data.get('title', 'Untitled')}")
             return article_data
