@@ -255,16 +255,31 @@ Your task is to write an informative, engaging blog post based on the following 
 
 2. **excerpt**: Short summary for post listings and SEO. MAXIMUM 160 characters. Do NOT exceed 160.
 
-3. **body_markdown**: The main article content with these requirements:
-   - Exactly 4-5 paragraphs
-   - Each paragraph MUST have its own H2 (##) title/heading
+3. **body_markdown**: The main article content with EXACTLY 6 sections. Each section MUST have its own H2 (##) heading and be a FULL PARAGRAPH (4-6 sentences minimum):
+
+   **SECTION 1 - News Summary:** (one full paragraph)
+   Summarize what happened in the news article with brief editorialization and context. Include ONE natural link to the original news source (the "url" field from PRIMARY NEWS ARTICLE) using anchor text like "according to [recent reports](source-url)".
+
+   **SECTION 2 - Liability Analysis:** (one full paragraph)
+   Provide the lawyer's point of view on the liabilities in this event. Discuss who may be at fault and why, and explain legal theories that could apply (negligence, strict liability, etc.).
+
+   **SECTION 3 - What To Do If This Happens To You:** (one full paragraph)
+   Practical steps someone should take if they experience this type of event. Include advice on documentation, seeking medical attention, and preserving evidence. If relevant, link to existing articles using format [Anchor Text](https://casevalue.law/blog/exact-slug-from-database). Only use slugs from the INTERNAL LINK DATABASE.
+
+   **SECTION 4 - Expected Recovery and Settlements:** (one full paragraph)
+   Discuss common range of recovery and settlements for this type of event, factors that affect settlement amounts, and types of damages that may be recoverable (medical expenses, lost wages, pain and suffering, etc.).
+
+   **SECTION 5 - Applicable Laws and Regulations:** (one full paragraph)
+   Cover laws or regulations that could apply in these types of events, relevant statutes of limitations, and state-specific considerations if applicable.
+
+   **SECTION 6 - Take Action:** (one full paragraph)
+   Strong call-to-action directing readers to use our free case evaluator. Emphasize the importance of understanding their case value and encourage readers to get a professional evaluation.
+
+   **Additional Requirements:**
+   - Each section MUST be a FULL PARAGRAPH (4-6 sentences minimum)
    - Optimized for SEO for a case evaluation website
    - Professional, informative tone empathetic to potential injury victims
-   - Subtly position readers to consider legal help/case evaluation
    - Include relevant keywords naturally throughout
-   - INTERNAL LINKS: ONLY link to slugs listed in the INTERNAL LINK DATABASE above. Use format: [Anchor Text](https://casevalue.law/blog/exact-slug-from-database). The anchor text should NOT be the full title of the linked article - instead use natural, contextual phrases that flow with the surrounding sentence. Example: "Learn more about [documenting your losses](https://casevalue.law/blog/lost-wages-article-slug) for your claim." Do NOT invent URLs. If no relevant slug exists in the database, include NO internal links.
-   - SOURCE ARTICLE LINK: Include ONE natural link to the original news source article within the body. The source URL is provided in the PRIMARY NEWS ARTICLE section above (the "url" field). Use natural anchor text that fits organically in the sentence (e.g., "according to [recent reports](source-url)" or "as [reported by the EEOC](source-url)"). Do NOT use the full URL as anchor text.
-   - End with a call-to-action about getting a free case evaluation
 
 4. **meta_title**: Title optimized for search engines. MAXIMUM 60 characters. Do NOT exceed 60.
 
@@ -295,7 +310,7 @@ Your task is to write an informative, engaging blog post based on the following 
     "title": "Compelling SEO-friendly headline for the blog post",
     "slug": "url-friendly-slug-here",
     "excerpt": "Max 160 chars. Count before submitting.",
-    "body_markdown": "## First Paragraph Title\\n\\nFirst paragraph content...\\n\\n## Second Paragraph Title\\n\\nSecond paragraph content...",
+    "body_markdown": "## News Summary\\n\\nSummary of what happened...\\n\\n## Liability Analysis\\n\\nLegal perspective on fault...\\n\\n## What To Do If This Happens To You\\n\\nSteps to take...\\n\\n## Expected Recovery and Settlements\\n\\nTypical settlement ranges...\\n\\n## Applicable Laws and Regulations\\n\\nRelevant laws...\\n\\n## Take Action\\n\\nCall to action...",
     "meta_title": "Max 60 chars. Count before submitting.",
     "alt_text": "Descriptive alt text for featured image",
     "meta_description": "Max 160 chars. Count before submitting.",
@@ -307,7 +322,7 @@ CRITICAL RULES:
 - Return ONLY the JSON object, no additional text or markdown code fences.
 - HARD CHARACTER LIMITS - NEVER EXCEED: excerpt (max 160), meta_title (max 60), meta_description (max 160). Count each character before output. If over limit, shorten the text.
 - LINKS: ONLY use slugs from the INTERNAL LINK DATABASE. If the database shows "Slug: example-slug", use [text](https://casevalue.law/blog/example-slug). NO invented links. If no matching slug exists, use NO links.
-- Body must have exactly 4-5 paragraphs, each with its own ## heading.
+- Body must have EXACTLY 6 sections with ## headings: News Summary, Liability Analysis, What To Do, Expected Recovery, Applicable Laws, Take Action.
 """
 
     max_retries = 2
