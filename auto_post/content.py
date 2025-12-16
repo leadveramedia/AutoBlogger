@@ -51,6 +51,103 @@ def sanitize_json_control_chars(s):
     return ''.join(result)
 
 
+def extract_json_fields_fallback(raw_text):
+    """
+    Fallback JSON extraction using regex when json.loads fails.
+    Extracts key fields from malformed JSON response.
+    """
+    import re
+
+    result = {}
+
+    # Extract title
+    title_match = re.search(r'"title"\s*:\s*"([^"]*(?:\\.[^"]*)*)"', raw_text)
+    if title_match:
+        result['title'] = title_match.group(1).replace('\\"', '"').replace('\\n', '\n')
+
+    # Extract slug
+    slug_match = re.search(r'"slug"\s*:\s*"([^"]*)"', raw_text)
+    if slug_match:
+        result['slug'] = slug_match.group(1)
+
+    # Extract excerpt
+    excerpt_match = re.search(r'"excerpt"\s*:\s*"([^"]*(?:\\.[^"]*)*)"', raw_text)
+    if excerpt_match:
+        result['excerpt'] = excerpt_match.group(1).replace('\\"', '"').replace('\\n', ' ')[:160]
+
+    # Extract body_markdown - find from "body_markdown": " to the next top-level key
+    body_match = re.search(r'"body_markdown"\s*:\s*"(.*?)(?:"\s*,\s*"(?:meta_title|alt_text|meta_description|keywords|categories)")', raw_text, re.DOTALL)
+    if body_match:
+        body = body_match.group(1)
+        # Unescape common sequences
+        body = body.replace('\\n', '\n').replace('\\t', '\t').replace('\\"', '"')
+        result['body_markdown'] = body
+
+    # Extract meta_title
+    meta_title_match = re.search(r'"meta_title"\s*:\s*"([^"]*(?:\\.[^"]*)*)"', raw_text)
+    if meta_title_match:
+        result['meta_title'] = meta_title_match.group(1).replace('\\"', '"')[:60]
+
+    # Extract alt_text
+    alt_match = re.search(r'"alt_text"\s*:\s*"([^"]*(?:\\.[^"]*)*)"', raw_text)
+    if alt_match:
+        result['alt_text'] = alt_match.group(1).replace('\\"', '"')
+
+    # Extract meta_description
+    meta_desc_match = re.search(r'"meta_description"\s*:\s*"([^"]*(?:\\.[^"]*)*)"', raw_text)
+    if meta_desc_match:
+        result['meta_description'] = meta_desc_match.group(1).replace('\\"', '"')[:160]
+
+    # Extract keywords array
+    keywords_match = re.search(r'"keywords"\s*:\s*\[([^\]]*)\]', raw_text)
+    if keywords_match:
+        keywords_str = keywords_match.group(1)
+        keywords = re.findall(r'"([^"]*)"', keywords_str)
+        result['keywords'] = keywords if keywords else ['personal injury', 'legal news']
+
+    # Extract categories array
+    categories_match = re.search(r'"categories"\s*:\s*\[([^\]]*)\]', raw_text)
+    if categories_match:
+        categories_str = categories_match.group(1)
+        categories = re.findall(r'"([^"]*)"', categories_str)
+        result['categories'] = categories if categories else ['legal-tips']
+
+    return result if result.get('title') and result.get('body_markdown') else None
+
+
+def validate_article_data(article_data):
+    """
+    Validate and fix article data - enforce limits and add fallbacks.
+    """
+    # Enforce character limits
+    if article_data.get('excerpt') and len(article_data['excerpt']) > 160:
+        article_data['excerpt'] = article_data['excerpt'][:157] + '...'
+        print(f"  Truncated excerpt to 160 chars")
+    if article_data.get('meta_title') and len(article_data['meta_title']) > 60:
+        article_data['meta_title'] = article_data['meta_title'][:57] + '...'
+        print(f"  Truncated meta_title to 60 chars")
+    if article_data.get('meta_description') and len(article_data['meta_description']) > 160:
+        article_data['meta_description'] = article_data['meta_description'][:157] + '...'
+        print(f"  Truncated meta_description to 160 chars")
+
+    # Fallback for missing required fields
+    if not article_data.get('alt_text'):
+        title = article_data.get('title', 'Legal news article')
+        article_data['alt_text'] = f"Professional image representing {title[:80]}"
+        print(f"  Generated fallback alt_text")
+    if not article_data.get('meta_title'):
+        article_data['meta_title'] = article_data.get('title', 'Legal News')[:57] + '...'
+        print(f"  Generated fallback meta_title")
+    if not article_data.get('keywords'):
+        article_data['keywords'] = ['personal injury', 'legal news', 'case evaluation']
+        print(f"  Generated fallback keywords")
+    if not article_data.get('categories'):
+        article_data['categories'] = ['legal-tips']
+        print(f"  Generated fallback categories")
+
+    return article_data
+
+
 def generate_image_with_gemini(alt_text):
     """
     Generate an image using Imagen 4 model.
@@ -355,31 +452,8 @@ CRITICAL RULES:
             json_string = sanitize_json_control_chars(json_string)
             article_data = json.loads(json_string)
 
-            # Enforce character limits programmatically
-            if article_data.get('excerpt') and len(article_data['excerpt']) > 160:
-                article_data['excerpt'] = article_data['excerpt'][:157] + '...'
-                print(f"  Truncated excerpt to 160 chars")
-            if article_data.get('meta_title') and len(article_data['meta_title']) > 60:
-                article_data['meta_title'] = article_data['meta_title'][:57] + '...'
-                print(f"  Truncated meta_title to 60 chars")
-            if article_data.get('meta_description') and len(article_data['meta_description']) > 160:
-                article_data['meta_description'] = article_data['meta_description'][:157] + '...'
-                print(f"  Truncated meta_description to 160 chars")
-
-            # Fallback for missing required fields
-            if not article_data.get('alt_text'):
-                title = article_data.get('title', 'Legal news article')
-                article_data['alt_text'] = f"Professional image representing {title[:80]}"
-                print(f"  Generated fallback alt_text")
-            if not article_data.get('meta_title'):
-                article_data['meta_title'] = article_data.get('title', 'Legal News')[:57] + '...'
-                print(f"  Generated fallback meta_title")
-            if not article_data.get('keywords'):
-                article_data['keywords'] = ['personal injury', 'legal news', 'case evaluation']
-                print(f"  Generated fallback keywords")
-            if not article_data.get('categories'):
-                article_data['categories'] = ['legal-tips']
-                print(f"  Generated fallback categories")
+            # Validate and add fallbacks
+            article_data = validate_article_data(article_data)
 
             print(f"Generated article: {article_data.get('title', 'Untitled')}")
             return article_data
@@ -390,7 +464,15 @@ CRITICAL RULES:
                 print("Retrying article generation...")
                 time.sleep(2)
             else:
-                print(f"Raw AI output: {response.text[:500]}...")
+                # Try fallback regex extraction before giving up
+                print(f"Attempting fallback JSON extraction...")
+                fallback_data = extract_json_fields_fallback(response.text)
+                if fallback_data:
+                    print(f"Fallback extraction successful!")
+                    # Validate and add fallbacks
+                    fallback_data = validate_article_data(fallback_data)
+                    return fallback_data
+                print(f"Fallback failed. Raw AI output: {response.text[:500]}...")
                 return None
         except Exception as e:
             print(f"Error generating content: {e}")
@@ -511,31 +593,8 @@ CRITICAL RULES:
             json_string = sanitize_json_control_chars(json_string)
             article_data = json.loads(json_string)
 
-            # Enforce character limits programmatically
-            if article_data.get('excerpt') and len(article_data['excerpt']) > 160:
-                article_data['excerpt'] = article_data['excerpt'][:157] + '...'
-                print(f"  Truncated excerpt to 160 chars")
-            if article_data.get('meta_title') and len(article_data['meta_title']) > 60:
-                article_data['meta_title'] = article_data['meta_title'][:57] + '...'
-                print(f"  Truncated meta_title to 60 chars")
-            if article_data.get('meta_description') and len(article_data['meta_description']) > 160:
-                article_data['meta_description'] = article_data['meta_description'][:157] + '...'
-                print(f"  Truncated meta_description to 160 chars")
-
-            # Fallback for missing required fields
-            if not article_data.get('alt_text'):
-                title = article_data.get('title', 'Legal news article')
-                article_data['alt_text'] = f"Professional image representing {title[:80]}"
-                print(f"  Generated fallback alt_text")
-            if not article_data.get('meta_title'):
-                article_data['meta_title'] = article_data.get('title', 'Legal News')[:57] + '...'
-                print(f"  Generated fallback meta_title")
-            if not article_data.get('keywords'):
-                article_data['keywords'] = ['personal injury', 'legal news', 'case evaluation']
-                print(f"  Generated fallback keywords")
-            if not article_data.get('categories'):
-                article_data['categories'] = ['legal-tips']
-                print(f"  Generated fallback categories")
+            # Validate and add fallbacks
+            article_data = validate_article_data(article_data)
 
             print(f"Generated article: {article_data.get('title', 'Untitled')}")
             return article_data
@@ -546,7 +605,15 @@ CRITICAL RULES:
                 print("Retrying article generation...")
                 time.sleep(2)
             else:
-                print(f"Raw AI output: {response.text[:500]}...")
+                # Try fallback regex extraction before giving up
+                print(f"Attempting fallback JSON extraction...")
+                fallback_data = extract_json_fields_fallback(response.text)
+                if fallback_data:
+                    print(f"Fallback extraction successful!")
+                    # Validate and add fallbacks
+                    fallback_data = validate_article_data(fallback_data)
+                    return fallback_data
+                print(f"Fallback failed. Raw AI output: {response.text[:500]}...")
                 return None
         except Exception as e:
             print(f"Error generating content: {e}")
