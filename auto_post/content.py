@@ -280,7 +280,7 @@ IMPORTANT: Return ONLY the JSON object, no additional text. Return empty array f
 
     try:
         response = client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-3-flash-preview',
             contents=prompt,
             config={
                 'response_mime_type': 'application/json'
@@ -435,7 +435,7 @@ CRITICAL RULES:
     for attempt in range(max_retries):
         try:
             response = client.models.generate_content(
-                model='gemini-2.5-flash',
+                model='gemini-3-flash-preview',
                 contents=prompt,
                 config={
                     'response_mime_type': 'application/json'
@@ -576,7 +576,7 @@ CRITICAL RULES:
     for attempt in range(max_retries):
         try:
             response = client.models.generate_content(
-                model='gemini-2.5-flash',
+                model='gemini-3-flash-preview',
                 contents=prompt,
                 config={
                     'response_mime_type': 'application/json'
