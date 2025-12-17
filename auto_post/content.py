@@ -166,12 +166,15 @@ def generate_image_with_gemini(alt_text):
 
 Subject: {alt_text}
 
-Requirements:
+CRITICAL REQUIREMENTS:
+- ABSOLUTELY NO TEXT anywhere in the image - no signs, labels, documents, screens, banners, book covers, street signs, or any written words
+- Avoid showing: newspapers, paperwork, computer screens, phones with visible text, clothing with logos/text
+- Focus on people, objects, and environments WITHOUT readable text
 - Professional, clean, modern aesthetic
 - Trustworthy and empathetic tone
-- No text, watermarks, or logos
 - Suitable for a personal injury law firm website
-- High quality, photorealistic style"""
+- High quality, photorealistic style
+- If the subject involves documents or screens, show them from angles where text is not visible or blurred"""
 
         response = client.models.generate_images(
             model='imagen-4.0-generate-001',
