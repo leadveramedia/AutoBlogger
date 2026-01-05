@@ -162,19 +162,19 @@ def generate_image_with_gemini(alt_text):
     try:
         client = genai.Client(api_key=GEMINI_API_KEY)
 
-        image_prompt = f"""Generate a professional stock photo for a law firm blog article.
+        image_prompt = f"""NO TEXT, NO WORDS, NO LETTERS, NO WRITING, NO SIGNS, NO LABELS in this image.
 
+Generate a professional stock photo for a law firm blog article.
 Subject: {alt_text}
 
-CRITICAL REQUIREMENTS:
-- ABSOLUTELY NO TEXT anywhere in the image - no signs, labels, documents, screens, banners, book covers, street signs, or any written words
-- Avoid showing: newspapers, paperwork, computer screens, phones with visible text, clothing with logos/text
-- Focus on people, objects, and environments WITHOUT readable text
+Requirements:
 - Professional, clean, modern aesthetic
 - Trustworthy and empathetic tone
 - Suitable for a personal injury law firm website
 - High quality, photorealistic style
-- If the subject involves documents or screens, show them from angles where text is not visible or blurred"""
+- Avoid any scenes containing: signs, documents, screens, banners, newspapers, books, clothing with text
+
+CRITICAL: This image must contain ZERO readable text, letters, numbers, or writing of any kind."""
 
         response = client.models.generate_images(
             model='imagen-4.0-generate-001',
@@ -392,7 +392,7 @@ Your task is to write an informative, engaging blog post based on the following 
 
 4. **meta_title**: Title optimized for search engines. MAXIMUM 60 characters. Do NOT exceed 60.
 
-5. **alt_text**: Alternative text for a featured image. Important for SEO and accessibility. Describe what an appropriate image would show related to the article topic.
+5. **alt_text**: Alternative text for a featured image. Describe a scene that does NOT contain any text, signs, documents, screens, or readable content. Focus on people, objects, or symbolic imagery without words. Important for SEO and accessibility.
 
 6. **meta_description**: Description for search engines. MAXIMUM 160 characters. Do NOT exceed 160.
 
@@ -531,7 +531,7 @@ Your task is to write a comprehensive, authoritative blog post for the following
 
 4. **meta_title**: Title optimized for search engines. MAXIMUM 60 characters. Do NOT exceed 60.
 
-5. **alt_text**: Alternative text for a featured image. Important for SEO and accessibility. Describe what an appropriate image would show related to the article topic.
+5. **alt_text**: Alternative text for a featured image. Describe a scene that does NOT contain any text, signs, documents, screens, or readable content. Focus on people, objects, or symbolic imagery without words. Important for SEO and accessibility.
 
 6. **meta_description**: Description for search engines. MAXIMUM 160 characters. Do NOT exceed 160.
 
