@@ -8,6 +8,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from .config import NEWS_SOURCES, REQUEST_HEADERS
+from .curation import record_success, record_failure
 
 
 def scrape_aboutlawsuits(url):
@@ -466,13 +467,22 @@ def scrape_all_sources():
         if scraper_func:
             try:
                 items = scraper_func(source['url'])
-                all_news.extend(items)
-                print(f"  Found {len(items)} items from {source['name']}")
+                if items and len(items) > 0:
+                    # Success - reset failure count
+                    record_success(source['scraper'])
+                    all_news.extend(items)
+                    print(f"  Found {len(items)} items from {source['name']}")
+                else:
+                    # No items returned - potential failure
+                    record_failure(source['scraper'], "No items returned")
+                    print(f"  Warning: {source['name']} returned no items")
 
                 # Be polite - small delay between requests
                 time.sleep(1)
 
             except Exception as e:
+                # Record failure for health tracking
+                record_failure(source['scraper'], str(e))
                 print(f"  Error with {source['name']}: {e}")
 
     print(f"\nTotal scraped: {len(all_news)} news items from all sources")

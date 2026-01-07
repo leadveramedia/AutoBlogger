@@ -59,6 +59,31 @@ def main():
     print("\n--- Step 1: Scraping News Sources ---")
     all_news = scrape_all_sources()
 
+    # Step 1.5: Source Health Management & Auto-Curation
+    print("\n--- Step 1.5: Source Health & Auto-Curation ---")
+    from auto_post.curation import run_source_curation
+
+    curation_results = run_source_curation()
+
+    if curation_results.get('sources_disabled'):
+        print(f"  Disabled {len(curation_results['sources_disabled'])} failing sources:")
+        for source in curation_results['sources_disabled']:
+            print(f"    - {source}")
+
+    if curation_results.get('sources_added'):
+        print(f"  Added {len(curation_results['sources_added'])} replacement sources:")
+        for source in curation_results['sources_added']:
+            print(f"    + {source}")
+
+    if curation_results.get('pending_replacements'):
+        print(f"  {len(curation_results['pending_replacements'])} replacements pending (will retry next run)")
+
+    if curation_results.get('errors'):
+        print(f"  Encountered {len(curation_results['errors'])} errors during curation")
+
+    if not curation_results.get('sources_disabled') and not curation_results.get('sources_added'):
+        print("  All sources healthy - no curation needed")
+
     if not all_news:
         print("No articles scraped from any source. Exiting.")
         return
