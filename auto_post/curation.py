@@ -18,7 +18,7 @@ import time
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
-import google.generativeai as genai
+from google import genai
 
 from .config import NEWS_SOURCES, REQUEST_HEADERS
 
@@ -239,8 +239,7 @@ def find_replacement_source(category: str, original_name: str, original_url: str
             logger.error("GEMINI_API_KEY not found in environment")
             return None
 
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        client = genai.Client(api_key=api_key)
 
         # Build discovery prompt
         prompt = f"""You are a research assistant for a legal news aggregation system.
@@ -289,7 +288,10 @@ IMPORTANT: Return ONLY valid JSON, no markdown formatting or code blocks."""
         logger.info(f"Searching for replacement for {original_name} in category {category}")
 
         # Call Gemini with web search
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(
+            model='gemini-2.0-flash-exp',
+            contents=prompt
+        )
         result_text = response.text.strip()
 
         # Clean up response (remove markdown code blocks if present)
@@ -381,8 +383,7 @@ def generate_scraper_code(source_name: str, source_url: str, category: str, scra
             logger.error("GEMINI_API_KEY not found in environment")
             return None
 
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        client = genai.Client(api_key=api_key)
 
         # Get example scrapers
         examples = get_example_scrapers()
@@ -433,7 +434,10 @@ OUTPUT: Return ONLY the complete Python function code with imports, no explanati
         logger.info(f"Generating scraper code for {source_name}")
 
         # Call Gemini
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(
+            model='gemini-2.0-flash-exp',
+            contents=prompt
+        )
         code = response.text.strip()
 
         # Clean up response (remove markdown code blocks if present)
