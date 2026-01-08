@@ -22,20 +22,21 @@ from google import genai
 
 from .config import NEWS_SOURCES, REQUEST_HEADERS
 
-# Configure logging
-logger = logging.getLogger('curation')
-handler = logging.FileHandler('/Users/rshao/AutoBlogger/AutoBlogger/curation.log')
-formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-handler.setFormatter(formatter)
-logger.addHandler(handler)
-logger.setLevel(logging.INFO)
-
-# Paths
-BASE_DIR = '/Users/rshao/AutoBlogger/AutoBlogger'
+# Paths - dynamically determine base directory
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HEALTH_FILE = os.path.join(BASE_DIR, 'source_health.json')
 CONFIG_FILE = os.path.join(BASE_DIR, 'auto_post', 'config.py')
 SCRAPERS_FILE = os.path.join(BASE_DIR, 'auto_post', 'scrapers.py')
 FAILED_SCRAPERS_DIR = os.path.join(BASE_DIR, 'failed_scrapers')
+LOG_FILE = os.path.join(BASE_DIR, 'curation.log')
+
+# Configure logging
+logger = logging.getLogger('curation')
+handler = logging.FileHandler(LOG_FILE)
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+logger.addHandler(handler)
+logger.setLevel(logging.INFO)
 
 # Constants
 FAILURE_THRESHOLD = 3
