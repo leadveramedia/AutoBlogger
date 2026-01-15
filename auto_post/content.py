@@ -148,9 +148,63 @@ def validate_article_data(article_data):
     return article_data
 
 
-def generate_image_with_gemini(alt_text):
+def detect_text_in_image(image_data):
+    """
+    Use Gemini vision model to detect if there's any text in the image.
+    Returns True if text is detected, False otherwise.
+    """
+    if not GEMINI_API_KEY:
+        print("Warning: GEMINI_API_KEY not set, skipping text detection")
+        return False
+
+    try:
+        import base64
+        client = genai.Client(api_key=GEMINI_API_KEY)
+
+        # Encode image to base64
+        image_b64 = base64.b64encode(image_data).decode('utf-8')
+
+        prompt = """Analyze this image carefully and determine if it contains ANY visible text, words, letters, numbers, signs, labels, or writing of any kind.
+
+This includes:
+- Text on signs, billboards, or banners
+- Text on documents, papers, or screens
+- Text on clothing, packaging, or products
+- Text on buildings or vehicles
+- Handwriting or printed text
+- Numbers or symbols that could be read as text
+- Partial text or individual letters
+
+Respond with ONLY "YES" if you detect ANY text/letters/numbers/writing, or "NO" if the image is completely free of any readable text."""
+
+        response = client.models.generate_content(
+            model='gemini-3-flash-preview',
+            contents=[
+                prompt,
+                {'mime_type': 'image/jpeg', 'data': image_b64}
+            ]
+        )
+
+        result = response.text.strip().upper()
+        has_text = 'YES' in result
+
+        if has_text:
+            print(f"  Text detected in image: {response.text[:100]}")
+        else:
+            print(f"  No text detected - image is clean")
+
+        return has_text
+
+    except Exception as e:
+        print(f"  Warning: Error during text detection: {e}")
+        # If detection fails, assume image is OK to avoid blocking
+        return False
+
+
+def generate_image_with_gemini(alt_text, max_retries=3):
     """
     Generate an image using Imagen 4 model.
+    Validates that no text appears in the image and retries if needed.
     Returns the image bytes or None if generation fails.
     """
     print(f"Generating image with prompt: {alt_text[:60]}...")
@@ -159,10 +213,9 @@ def generate_image_with_gemini(alt_text):
         print("Error: GEMINI_API_KEY not set")
         return None
 
-    try:
-        client = genai.Client(api_key=GEMINI_API_KEY)
+    client = genai.Client(api_key=GEMINI_API_KEY)
 
-        image_prompt = f"""NO TEXT, NO WORDS, NO LETTERS, NO WRITING, NO SIGNS, NO LABELS in this image.
+    image_prompt = f"""NO TEXT, NO WORDS, NO LETTERS, NO WRITING, NO SIGNS, NO LABELS in this image.
 
 Generate a professional stock photo for a law firm blog article.
 Subject: {alt_text}
@@ -176,27 +229,52 @@ Requirements:
 
 CRITICAL: This image must contain ZERO readable text, letters, numbers, or writing of any kind."""
 
-        response = client.models.generate_images(
-            model='imagen-4.0-generate-001',
-            prompt=image_prompt,
-            config={
-                'number_of_images': 1,
-            }
-        )
+    for attempt in range(max_retries):
+        try:
+            response = client.models.generate_images(
+                model='imagen-4.0-generate-001',
+                prompt=image_prompt,
+                config={
+                    'number_of_images': 1,
+                }
+            )
 
-        if response.generated_images and len(response.generated_images) > 0:
-            image = response.generated_images[0]
-            if hasattr(image, 'image') and hasattr(image.image, 'image_bytes'):
-                image_data = image.image.image_bytes
-                print(f"Image generated successfully ({len(image_data)} bytes)")
-                return image_data
+            if response.generated_images and len(response.generated_images) > 0:
+                image = response.generated_images[0]
+                if hasattr(image, 'image') and hasattr(image.image, 'image_bytes'):
+                    image_data = image.image.image_bytes
+                    print(f"Image generated successfully ({len(image_data)} bytes)")
 
-        print("No image was generated in response")
-        return None
+                    # Validate that image contains no text
+                    print(f"  Validating image is text-free (attempt {attempt + 1}/{max_retries})...")
+                    if detect_text_in_image(image_data):
+                        if attempt < max_retries - 1:
+                            print(f"  Text detected! Regenerating image (attempt {attempt + 2}/{max_retries})...")
+                            time.sleep(2)  # Brief delay before retry
+                            continue
+                        else:
+                            print(f"  Text still detected after {max_retries} attempts. Using last generated image.")
+                            return image_data
+                    else:
+                        print(f"  Image validation passed - no text detected!")
+                        return image_data
 
-    except Exception as e:
-        print(f"Error generating image: {e}")
-        return None
+            print("No image was generated in response")
+            if attempt < max_retries - 1:
+                print(f"  Retrying image generation (attempt {attempt + 2}/{max_retries})...")
+                time.sleep(2)
+            else:
+                return None
+
+        except Exception as e:
+            print(f"Error generating image: {e}")
+            if attempt < max_retries - 1:
+                print(f"  Retrying after error (attempt {attempt + 2}/{max_retries})...")
+                time.sleep(2)
+            else:
+                return None
+
+    return None
 
 
 def select_best_articles(news_items, num_articles=2, used_topics=None):

@@ -118,6 +118,27 @@ NEWS_SOURCES = [
         'category': 'personal_injury',
         'enabled': True,
         'scraper': 'onscenetv'
+    },
+    {
+        'name': 'NHTSA Press Releases',
+        'url': 'https://www.nhtsa.gov/press-releases',
+        'category': 'motor_vehicle',
+        'enabled': True,
+        'scraper': 'nhtsa'
+    },
+    {
+        'name': 'DOL Newsroom',
+        'url': 'https://www.dol.gov/newsroom/releases',
+        'category': 'workers_comp',
+        'enabled': True,
+        'scraper': 'dol'
+    },
+    {
+        'name': 'Insurance Journal National',
+        'url': 'https://www.insurancejournal.com/news/national/',
+        'category': 'personal_injury',
+        'enabled': True,
+        'scraper': 'insurancejournal'
     }
 ]
 
@@ -135,4 +156,73 @@ VALID_CATEGORIES = [
     "texas-law",
     "legal-tips",
     "case-studies"
+]
+
+# --- PRACTICE AREA KEYWORDS (for filtering general news sources) ---
+# Articles from general news must contain at least one keyword to be included
+PRACTICE_AREA_KEYWORDS = [
+    # Personal Injury
+    'personal injury', 'injured', 'injury lawsuit', 'injury claim', 'accident victim',
+    'negligence', 'liability', 'damages awarded', 'settlement', 'compensation',
+
+    # Medical Malpractice
+    'medical malpractice', 'medical negligence', 'surgical error', 'misdiagnosis',
+    'hospital negligence', 'doctor sued', 'patient death', 'medical error',
+    'birth injury', 'anesthesia error', 'nursing home abuse', 'elder abuse',
+
+    # Motor Vehicle Accidents
+    'car accident', 'car crash', 'auto accident', 'vehicle accident', 'truck accident',
+    'motorcycle accident', 'pedestrian hit', 'drunk driver', 'dui crash', 'fatal crash',
+    'hit and run', 'multi-vehicle', 'rollover', 'head-on collision', 'rear-end',
+    'uber accident', 'lyft accident', 'rideshare accident', 'bus accident',
+
+    # Wrongful Death
+    'wrongful death', 'fatal accident', 'death lawsuit', 'family sues', 'killed',
+    'fatality', 'deceased', 'survivor lawsuit',
+
+    # Dog Bites
+    'dog bite', 'dog attack', 'animal attack', 'pit bull attack', 'mauled',
+    'dog owner liable', 'dangerous dog',
+
+    # Premises Liability
+    'slip and fall', 'trip and fall', 'premises liability', 'property owner liable',
+    'unsafe conditions', 'negligent security', 'swimming pool accident',
+    'amusement park injury', 'store injury', 'parking lot assault',
+
+    # Product Liability
+    'product recall', 'defective product', 'product liability', 'consumer safety',
+    'fda recall', 'cpsc recall', 'product defect', 'manufacturer liable',
+    'toxic exposure', 'contaminated', 'dangerous product',
+
+    # Employment Law
+    'employment discrimination', 'workplace discrimination', 'wrongful termination',
+    'sexual harassment', 'wage theft', 'unpaid overtime', 'retaliation',
+    'hostile work environment', 'eeoc', 'ada violation', 'fmla violation',
+    'whistleblower', 'class action employment',
+
+    # Civil Rights
+    'civil rights', 'police brutality', 'excessive force', 'false arrest',
+    'wrongful imprisonment', 'civil liberties', 'constitutional violation',
+    'section 1983', 'prisoner rights', 'inmate abuse',
+
+    # Worker's Compensation
+    'workers compensation', 'workplace injury', 'on the job injury', 'osha violation',
+    'osha fine', 'workplace safety', 'occupational hazard', 'work accident',
+    'construction accident', 'industrial accident', 'warehouse injury',
+
+    # Social Security Disability
+    'social security disability', 'ssdi', 'ssi benefits', 'disability benefits',
+    'disability claim', 'disability denied',
+
+    # Intellectual Property
+    'patent infringement', 'trademark infringement', 'copyright infringement',
+    'intellectual property lawsuit', 'trade secret',
+
+    # Professional Malpractice
+    'legal malpractice', 'accounting malpractice', 'professional negligence',
+    'fiduciary duty', 'breach of duty',
+
+    # Class Action
+    'class action', 'mass tort', 'multidistrict litigation', 'mdl',
+    'class certification', 'bellwether trial'
 ]

@@ -7,8 +7,20 @@ from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 
-from .config import NEWS_SOURCES, REQUEST_HEADERS
+from .config import NEWS_SOURCES, REQUEST_HEADERS, PRACTICE_AREA_KEYWORDS
 from .curation import record_success, record_failure
+
+
+def matches_practice_area(title, summary=''):
+    """
+    Check if an article title/summary matches any practice area keywords.
+    Returns True if at least one keyword is found, False otherwise.
+    """
+    text = f"{title} {summary}".lower()
+    for keyword in PRACTICE_AREA_KEYWORDS:
+        if keyword.lower() in text:
+            return True
+    return False
 
 
 def scrape_aboutlawsuits(url):
@@ -437,6 +449,105 @@ def scrape_onscenetv(url):
         return []
 
 
+def scrape_nhtsa(url):
+    """Scrape NHTSA for vehicle safety news, recalls, and crash investigations."""
+    print(f"  Scraping NHTSA...")
+    news_items = []
+
+    try:
+        response = requests.get(url, headers=REQUEST_HEADERS, timeout=30)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        # NHTSA press releases page structure
+        headlines = soup.select('article h2 a, article h3 a, .views-row h3 a, .press-release a, h2 a, h3 a')
+
+        for headline in headlines[:10]:
+            title = headline.get_text(strip=True)
+            href = headline.get('href', '')
+
+            if title and href and len(title) > 15:
+                news_items.append({
+                    'title': title,
+                    'url': href if href.startswith('http') else urljoin('https://www.nhtsa.gov', href),
+                    'summary': '',
+                    'source': 'NHTSA',
+                    'category': 'motor_vehicle'
+                })
+
+        return news_items[:5]
+
+    except Exception as e:
+        print(f"  Error scraping NHTSA: {e}")
+        return []
+
+
+def scrape_dol(url):
+    """Scrape Department of Labor newsroom for workers comp and workplace news."""
+    print(f"  Scraping DOL News...")
+    news_items = []
+
+    try:
+        response = requests.get(url, headers=REQUEST_HEADERS, timeout=30)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        # DOL newsroom structure
+        headlines = soup.select('article h2 a, article h3 a, .news-item a, .views-row a, h3 a, h2 a')
+
+        for headline in headlines[:15]:
+            title = headline.get_text(strip=True)
+            href = headline.get('href', '')
+
+            if title and href and len(title) > 20:
+                news_items.append({
+                    'title': title,
+                    'url': href if href.startswith('http') else urljoin('https://www.dol.gov', href),
+                    'summary': '',
+                    'source': 'DOL',
+                    'category': 'workers_comp'
+                })
+
+        return news_items[:5]
+
+    except Exception as e:
+        print(f"  Error scraping DOL: {e}")
+        return []
+
+
+def scrape_insurancejournal(url):
+    """Scrape Insurance Journal for national accident and claims news."""
+    print(f"  Scraping Insurance Journal...")
+    news_items = []
+
+    try:
+        response = requests.get(url, headers=REQUEST_HEADERS, timeout=30)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        # Insurance Journal article structure
+        headlines = soup.select('article h2 a, article h3 a, .entry-title a, h2 a, h3 a')
+
+        for headline in headlines[:15]:
+            title = headline.get_text(strip=True)
+            href = headline.get('href', '')
+
+            if title and href and len(title) > 15:
+                news_items.append({
+                    'title': title,
+                    'url': href if href.startswith('http') else urljoin(url, href),
+                    'summary': '',
+                    'source': 'Insurance Journal',
+                    'category': 'personal_injury'
+                })
+
+        return news_items[:5]
+
+    except Exception as e:
+        print(f"  Error scraping Insurance Journal: {e}")
+        return []
+
+
 # Map scraper names to functions
 SCRAPERS = {
     'aboutlawsuits': scrape_aboutlawsuits,
@@ -450,8 +561,14 @@ SCRAPERS = {
     'cnn': scrape_cnn,
     'nytimes': scrape_nytimes,
     'propublica': scrape_propublica,
-    'onscenetv': scrape_onscenetv
+    'onscenetv': scrape_onscenetv,
+    'nhtsa': scrape_nhtsa,
+    'dol': scrape_dol,
+    'insurancejournal': scrape_insurancejournal
 }
+
+# General news sources that need keyword filtering
+GENERAL_NEWS_SCRAPERS = {'apnews', 'cnn', 'nytimes', 'propublica', 'courthousenews'}
 
 
 def scrape_all_sources():
@@ -468,10 +585,24 @@ def scrape_all_sources():
             try:
                 items = scraper_func(source['url'])
                 if items and len(items) > 0:
+                    # Apply keyword filtering for general news sources
+                    if source['scraper'] in GENERAL_NEWS_SCRAPERS:
+                        filtered_items = []
+                        for item in items:
+                            if matches_practice_area(item.get('title', ''), item.get('summary', '')):
+                                filtered_items.append(item)
+                        if filtered_items:
+                            print(f"  Found {len(items)} items from {source['name']}, {len(filtered_items)} match practice areas")
+                            all_news.extend(filtered_items)
+                        else:
+                            print(f"  Found {len(items)} items from {source['name']}, 0 match practice areas (filtered out)")
+                    else:
+                        # Specialized sources - keep all items
+                        all_news.extend(items)
+                        print(f"  Found {len(items)} items from {source['name']}")
+
                     # Success - reset failure count
                     record_success(source['scraper'])
-                    all_news.extend(items)
-                    print(f"  Found {len(items)} items from {source['name']}")
                 else:
                     # No items returned - potential failure
                     record_failure(source['scraper'], "No items returned")
