@@ -490,11 +490,11 @@ Your task is to write an informative, engaging blog post based on the following 
    - "legal-tips"
    - "case-studies"
 
-9. **title**: A compelling, SEO-friendly headline for the blog post.
+9. **title**: A compelling, SEO-friendly headline for the blog post. MAXIMUM 60 characters. Do NOT exceed 60.
 
 **--- JSON SCHEMA ---**
 {{
-    "title": "Compelling SEO-friendly headline for the blog post",
+    "title": "Max 60 chars. Count before submitting.",
     "slug": "url-friendly-slug-here",
     "excerpt": "Max 160 chars. Count before submitting.",
     "body_markdown": "## Florida Files Landmark Discrimination Suit\\n\\nFull paragraph about what happened...\\n\\n## Breaking Down the Legal Claims Against Starbucks\\n\\nFull paragraph on liability...\\n\\n## Protecting Your Rights in the Workplace\\n\\nFull paragraph on steps to take...\\n\\n## What Discrimination Victims Could Recover\\n\\nFull paragraph on settlements...\\n\\n## Federal and State Employment Laws at Play\\n\\nFull paragraph on laws...\\n\\n## Find Out What Your Case Is Worth\\n\\nFull paragraph call to action...",
@@ -507,7 +507,7 @@ Your task is to write an informative, engaging blog post based on the following 
 
 CRITICAL RULES:
 - Return ONLY the JSON object, no additional text or markdown code fences.
-- HARD CHARACTER LIMITS - NEVER EXCEED: excerpt (max 160), meta_title (max 60), meta_description (max 160). Count each character before output. If over limit, shorten the text.
+- HARD CHARACTER LIMITS - NEVER EXCEED: title (max 60), excerpt (max 160), meta_title (max 60), meta_description (max 160). Count each character before output. If over limit, shorten the text.
 - LINKS: ONLY use slugs from the INTERNAL LINK DATABASE. If the database shows "Slug: example-slug", use [text](https://casevalue.law/blog/example-slug). NO invented links. If no matching slug exists, use NO links.
 - Body must have EXACTLY 6 sections, each with a DYNAMIC ## heading specific to the article content. DO NOT use generic headings like "News Summary" or "Liability Analysis".
 """
@@ -629,11 +629,11 @@ Your task is to write a comprehensive, authoritative blog post for the following
    - "legal-tips"
    - "case-studies"
 
-9. **title**: Use the exact title provided above.
+9. **title**: Use the title provided above. If it exceeds 60 characters, shorten it while keeping the key message. MAXIMUM 60 characters.
 
 **--- JSON SCHEMA ---**
 {{
-    "title": "{title}",
+    "title": "Max 60 chars. Shorten provided title if needed.",
     "slug": "url-friendly-slug-here",
     "excerpt": "Max 160 chars. Count before submitting.",
     "body_markdown": "## First Section Title\\n\\nFirst section content...\\n\\n## Second Section Title\\n\\nSecond section content...",
@@ -646,7 +646,7 @@ Your task is to write a comprehensive, authoritative blog post for the following
 
 CRITICAL RULES:
 - Return ONLY the JSON object, no additional text or markdown code fences.
-- HARD CHARACTER LIMITS - NEVER EXCEED: excerpt (max 160), meta_title (max 60), meta_description (max 160). Count each character before output.
+- HARD CHARACTER LIMITS - NEVER EXCEED: title (max 60), excerpt (max 160), meta_title (max 60), meta_description (max 160). Count each character before output. If over limit, shorten the text.
 - MINIMUM WORD COUNT: body_markdown MUST contain at least 2500 words. This is a comprehensive legal guide.
 - This is an EVERGREEN educational guide - do not reference current events or dates unless essential.
 - Body must have 10-15 sections with ## headings for an authoritative, comprehensive, in-depth guide.
