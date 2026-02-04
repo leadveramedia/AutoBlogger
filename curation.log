@@ -1,0 +1,5 @@
+2026-01-07 13:44:35,441 - WARNING - Failure recorded for test_scraper: Connection timeout (consecutive: 1)
+2026-01-07 13:44:35,441 - WARNING - Failure recorded for test_scraper: Connection timeout (consecutive: 2)
+2026-01-07 13:44:35,441 - WARNING - Failure recorded for test_scraper: Connection timeout (consecutive: 3)
+2026-01-07 13:44:35,441 - INFO - Success recorded for test_scraper
+2026-01-07 13:45:13,646 - INFO - Disabled source in config: fda
