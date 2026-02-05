@@ -8,6 +8,7 @@ import json
 import time
 from datetime import datetime, timezone
 
+import requests as req
 from google import genai
 
 from .config import GEMINI_API_KEY
@@ -145,6 +146,69 @@ def validate_article_data(article_data):
         article_data['categories'] = ['legal-tips']
         print(f"  Generated fallback categories")
 
+    return article_data
+
+
+def validate_external_urls(article_data, timeout=5):
+    """
+    Validate external URLs in article body_markdown.
+    Removes links that return errors (404, timeout, etc.).
+    Keeps internal links (casevalue.law) untouched.
+    """
+    body = article_data.get('body_markdown', '')
+    if not body:
+        return article_data
+
+    link_pattern = r'\[([^\]]+)\]\(([^)]+)\)'
+    links_to_check = []
+
+    for match in re.finditer(link_pattern, body):
+        link_text = match.group(1)
+        link_url = match.group(2)
+        if 'casevalue.law' not in link_url:
+            links_to_check.append((match.group(0), link_text, link_url))
+
+    if not links_to_check:
+        print("  No external links to validate")
+        return article_data
+
+    print(f"  Validating {len(links_to_check)} external URL(s)...")
+    removed_count = 0
+
+    for full_match, link_text, link_url in links_to_check:
+        try:
+            response = req.head(
+                link_url,
+                timeout=timeout,
+                allow_redirects=True,
+                headers={'User-Agent': 'Mozilla/5.0 (compatible; LinkChecker/1.0)'}
+            )
+            # Some servers block HEAD requests, fall back to GET
+            if response.status_code == 405:
+                response = req.get(
+                    link_url,
+                    timeout=timeout,
+                    allow_redirects=True,
+                    headers={'User-Agent': 'Mozilla/5.0 (compatible; LinkChecker/1.0)',
+                             'Range': 'bytes=0-0'}
+                )
+            if response.status_code >= 400:
+                print(f"    REMOVING broken link ({response.status_code}): {link_url[:80]}")
+                body = body.replace(full_match, link_text)
+                removed_count += 1
+            else:
+                print(f"    OK ({response.status_code}): {link_url[:80]}")
+        except req.RequestException as e:
+            print(f"    REMOVING unreachable link: {link_url[:80]} ({e})")
+            body = body.replace(full_match, link_text)
+            removed_count += 1
+
+    if removed_count > 0:
+        print(f"  Removed {removed_count} broken external link(s)")
+    else:
+        print(f"  All external links validated successfully")
+
+    article_data['body_markdown'] = body
     return article_data
 
 
@@ -508,7 +572,8 @@ Your task is to write an informative, engaging blog post based on the following 
 CRITICAL RULES:
 - Return ONLY the JSON object, no additional text or markdown code fences.
 - HARD CHARACTER LIMITS - NEVER EXCEED: title (max 60), excerpt (max 160), meta_title (max 60), meta_description (max 160). Count each character before output. If over limit, shorten the text.
-- LINKS: ONLY use slugs from the INTERNAL LINK DATABASE. If the database shows "Slug: example-slug", use [text](https://casevalue.law/blog/example-slug). NO invented links. If no matching slug exists, use NO links.
+- INTERNAL LINKS: ONLY use slugs from the INTERNAL LINK DATABASE. If the database shows "Slug: example-slug", use [text](https://casevalue.law/blog/example-slug). NO invented links. If no matching slug exists, use NO internal links.
+- EXTERNAL AUTHORITY LINKS: Include 2-3 external links to authoritative sources throughout the article. Use government websites (.gov) like OSHA, FDA, NHTSA, EEOC, DOL, CDC; legal databases like Cornell Law Institute (law.cornell.edu); official legal organizations (ABA, state bar associations); or medical/scientific sources (NIH, Mayo Clinic) when relevant. Use standard markdown: [descriptive anchor text](https://full-url). Place them naturally in sections about legal framework, steps to take, or applicable laws. Do NOT link to news articles or competitor law firms. Only use URLs you are confident are real and publicly accessible.
 - Body must have EXACTLY 6 sections, each with a DYNAMIC ## heading specific to the article content. DO NOT use generic headings like "News Summary" or "Liability Analysis".
 """
 
@@ -535,6 +600,7 @@ CRITICAL RULES:
 
             # Validate and add fallbacks
             article_data = validate_article_data(article_data)
+            article_data = validate_external_urls(article_data)
 
             print(f"Generated article: {article_data.get('title', 'Untitled')}")
             return article_data
@@ -552,6 +618,7 @@ CRITICAL RULES:
                     print(f"Fallback extraction successful!")
                     # Validate and add fallbacks
                     fallback_data = validate_article_data(fallback_data)
+                    fallback_data = validate_external_urls(fallback_data)
                     return fallback_data
                 print(f"Fallback failed. Raw AI output: {response.text[:500]}...")
                 return None
@@ -605,6 +672,7 @@ Your task is to write a comprehensive, authoritative blog post for the following
    - Naturally position readers to consider getting a free case evaluation
    - Include relevant keywords naturally throughout
    - INTERNAL LINKS: ONLY link to slugs listed in the INTERNAL LINK DATABASE above. Use format: [Anchor Text](https://casevalue.law/blog/exact-slug-from-database). The anchor text should NOT be the full title of the linked article - instead use natural, contextual phrases that flow with the surrounding sentence. Do NOT invent URLs. If no relevant slug exists in the database, include NO internal links.
+   - EXTERNAL AUTHORITY LINKS: Include 2-3 external links to authoritative sources throughout the guide. Use government websites (.gov) like OSHA, FDA, NHTSA, EEOC, DOL, CDC; legal databases like Cornell Law Institute (law.cornell.edu); official legal organizations (ABA, state bar associations); or medical/scientific sources (NIH, Mayo Clinic) when relevant. Use standard markdown: [descriptive anchor text](https://full-url). Place them naturally where citing authority adds credibility, especially in sections discussing laws, regulations, or official procedures. Do NOT link to news articles or competitor law firms. Only use URLs you are confident are real and publicly accessible.
    - End with a strong call-to-action about getting a free case evaluation
 
 4. **meta_title**: Title optimized for search engines. MAXIMUM 60 characters. Do NOT exceed 60.
@@ -676,6 +744,7 @@ CRITICAL RULES:
 
             # Validate and add fallbacks
             article_data = validate_article_data(article_data)
+            article_data = validate_external_urls(article_data)
 
             print(f"Generated article: {article_data.get('title', 'Untitled')}")
             return article_data
@@ -693,6 +762,7 @@ CRITICAL RULES:
                     print(f"Fallback extraction successful!")
                     # Validate and add fallbacks
                     fallback_data = validate_article_data(fallback_data)
+                    fallback_data = validate_external_urls(fallback_data)
                     return fallback_data
                 print(f"Fallback failed. Raw AI output: {response.text[:500]}...")
                 return None

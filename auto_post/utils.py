@@ -132,11 +132,15 @@ def parse_inline_with_links(text):
         link_text = match.group(1)
         link_url = match.group(2)
 
-        mark_defs.append({
+        link_mark_def = {
             "_type": "link",
             "_key": link_key,
             "href": link_url
-        })
+        }
+        # Add nofollow for external links (not casevalue.law)
+        if 'casevalue.law' not in link_url:
+            link_mark_def["rel"] = "nofollow"
+        mark_defs.append(link_mark_def)
 
         children.append({
             "_type": "span",
