@@ -22,6 +22,12 @@ SANITY_HEADERS = {
 # --- GEMINI CONFIGURATION ---
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
 
+# --- VIDEO GENERATION CONFIGURATION ---
+ENABLE_VIDEO_GENERATION = os.environ.get('ENABLE_VIDEO_GENERATION', 'true').lower() == 'true'
+_BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+VIDEOS_DIR = os.path.join(_BASE_DIR, 'videos')
+SPOKESPERSON_IMAGES_DIR = os.path.join(_BASE_DIR, 'assets')
+
 # --- SCRAPING CONFIGURATION ---
 REQUEST_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'

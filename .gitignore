@@ -23,3 +23,12 @@ ENV/
 # OS
 .DS_Store
 Thumbs.db
+
+# Generated videos
+videos/
+
+# Reference assets
+assets/
+
+# Tracking files
+outfit_history.json

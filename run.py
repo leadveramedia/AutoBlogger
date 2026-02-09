@@ -31,7 +31,8 @@ from auto_post import (
     load_used_topics,
     add_used_topic,
 )
-from auto_post.config import GEMINI_API_KEY, SANITY_PROJECT_ID, SANITY_TOKEN
+from auto_post.config import GEMINI_API_KEY, SANITY_PROJECT_ID, SANITY_TOKEN, ENABLE_VIDEO_GENERATION
+from auto_post.video import generate_tiktok_video
 
 
 def main():
@@ -186,6 +187,17 @@ def main():
                 # Remove the used title and save
                 titles.pop(0)
                 save_title_list(titles)
+
+                # Generate TikTok video (non-blocking - failure doesn't affect article)
+                if ENABLE_VIDEO_GENERATION:
+                    try:
+                        video_path = generate_tiktok_video(title_article)
+                        if video_path:
+                            print(f"  TikTok video saved: {video_path}")
+                        else:
+                            print(f"  Video generation unsuccessful (article still published)")
+                    except Exception as e:
+                        print(f"  Video generation failed: {e} (article still published)")
             else:
                 fail_count += 1
         else:

@@ -13,6 +13,7 @@ from .scrapers import scrape_all_sources
 from .content import select_best_articles, generate_article, generate_article_from_title
 from .sanity import get_existing_posts, post_to_sanity
 from .utils import load_title_list, save_title_list, load_used_topics, add_used_topic
+from .video import generate_tiktok_video
 
 __all__ = [
     'scrape_all_sources',
@@ -25,4 +26,5 @@ __all__ = [
     'save_title_list',
     'load_used_topics',
     'add_used_topic',
+    'generate_tiktok_video',
 ]
