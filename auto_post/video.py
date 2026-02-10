@@ -619,7 +619,6 @@ def generate_tiktok_video(article_data):
     config = types.GenerateVideosConfig(
         aspect_ratio="16:9",
         resolution="720p",
-        person_generation="allow_adult",
         duration_seconds=INITIAL_DURATION,
     )
     if reference_images:
