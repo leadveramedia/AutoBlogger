@@ -27,8 +27,8 @@ Thumbs.db
 # Generated videos
 videos/
 
-# Reference assets
-assets/
+# Generated videos only (reference assets are committed)
+
 
 # Tracking files
 outfit_history.json
