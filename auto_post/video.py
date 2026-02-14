@@ -1,6 +1,5 @@
 """
-TikTok video generation for evergreen articles.
-Primary: Argil API (avatar-based). Fallback: Veo 3.1 (prompt-based).
+TikTok video generation via useapi.net Google Flow (Veo 3.1 Fast).
 """
 
 import os
@@ -12,25 +11,12 @@ import base64
 import requests
 
 from google import genai
-from google.genai import types
 
 from .config import (GEMINI_API_KEY, VIDEOS_DIR, SPOKESPERSON_IMAGES_DIR,
-                     ARGIL_API_KEY, ARGIL_VOICE_ID, ARGIL_BASE_URL,
-                     USEAPI_TOKEN, USEAPI_GOOGLE_EMAIL, USEAPI_BASE_URL)
+                     USEAPI_TOKEN, USEAPI_GOOGLE_EMAIL, USEAPI_BASE_URL,
+                     VIDEO_SEED_MODE)
 from .content import sanitize_json_control_chars
 from .outfit_tracking import load_outfit_history, save_outfit
-
-# --- Argil Constants ---
-ARGIL_POLL_INTERVAL = 15     # seconds between polling
-ARGIL_MAX_POLLS = 40         # ~10 min max wait
-
-# --- Veo Constants ---
-POLL_INTERVAL = 20           # seconds between polling
-MAX_POLLS = 20               # max polls per clip (~6.7 min)
-INITIAL_DURATION = 8         # seconds for first clip
-NUM_EXTENSIONS = 3           # number of extensions to reach ~29s
-EXTENSION_PROCESS_DELAY = 30 # seconds to wait for server-side processing before extending
-EXTENSION_MAX_RETRIES = 2    # max retries per extension on INVALID_ARGUMENT
 
 # --- Flow (useapi.net) Constants ---
 FLOW_POLL_INTERVAL = 15      # seconds between polling
@@ -40,672 +26,6 @@ FLOW_MODEL = 'veo-3.1-fast'  # supports R2V, cheapest
 # Supported image extensions (for Veo reference images)
 _IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp'}
 _MIME_TYPES = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp'}
-
-
-# ============================================================
-#  ARGIL VIDEO GENERATION (PRIMARY)
-# ============================================================
-
-def _pick_video_style():
-    """Randomly select a video style with layout for Argil videos."""
-    style_type = random.choice(['talking-head', 'split-screen', 'dynamic'])
-
-    if style_type == 'talking-head':
-        return {
-            'name': 'talking-head',
-            'autoBrolls': None,
-            'zoom_range': (1.0, 1.15),
-        }
-    elif style_type == 'split-screen':
-        return {
-            'name': 'split-screen',
-            'autoBrolls': {
-                'enable': True,
-                'source': 'AVATAR_ACTION',
-                'layout': random.choice(['SPLIT_AVATAR_LEFT', 'SPLIT_AVATAR_RIGHT']),
-            },
-            'zoom_range': (1.0, 1.2),
-        }
-    else:
-        return {
-            'name': 'dynamic',
-            'autoBrolls': {
-                'enable': True,
-                'source': 'AVATAR_ACTION',
-                'layout': random.choice([
-                    'FULLSCREEN', 'BACKGROUND',
-                    'AVATAR_BOTTOM_LEFT', 'AVATAR_BOTTOM_RIGHT',
-                ]),
-            },
-            'zoom_range': (1.0, 1.4),
-        }
-
-
-def _argil_headers():
-    """Return headers for Argil API requests."""
-    return {'x-api-key': ARGIL_API_KEY, 'Content-Type': 'application/json'}
-
-
-def _fetch_valentina_avatars():
-    """Fetch all usable Valentina avatars from Argil API."""
-    try:
-        resp = requests.get(f'{ARGIL_BASE_URL}/avatars',
-                           headers=_argil_headers(), timeout=30)
-        resp.raise_for_status()
-    except requests.RequestException as e:
-        print(f"  Error fetching Argil avatars: {e}")
-        return []
-
-    avatars = resp.json()
-    # Filter: name OR actorName contains "valentina" (case-insensitive) AND status is IDLE
-    valentinas = [
-        a for a in avatars
-        if ('valentina' in a.get('name', '').lower()
-            or 'valentina' in a.get('actorName', '').lower())
-        and a.get('status') == 'IDLE'
-    ]
-    print(f"  Found {len(valentinas)} usable Valentina avatar(s) out of {len(avatars)} total")
-    for v in valentinas:
-        print(f"    - {v['name']} (id: {v['id'][:12]}...)")
-    return valentinas
-
-
-def _generate_avatar_image(description):
-    """Generate a new image of Valentina using reference images + description.
-    Uses Gemini native image generation to maintain facial consistency.
-    Returns image bytes (PNG) or None."""
-    client = genai.Client(api_key=GEMINI_API_KEY)
-
-    # Load reference images from assets/
-    ref_parts = []
-    for filename in sorted(os.listdir(SPOKESPERSON_IMAGES_DIR)):
-        ext = os.path.splitext(filename)[1].lower()
-        if ext not in _IMAGE_EXTENSIONS:
-            continue
-        filepath = os.path.join(SPOKESPERSON_IMAGES_DIR, filename)
-        with open(filepath, 'rb') as f:
-            image_bytes = f.read()
-        mime_type = _MIME_TYPES.get(ext, 'image/jpeg')
-        ref_parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
-        if len(ref_parts) >= 2:
-            break
-
-    if not ref_parts:
-        print("    No reference images found in assets/")
-        return None
-
-    print(f"    Loaded {len(ref_parts)} reference image(s) for generation")
-
-    prompt_text = f"""Generate a NEW image of this EXACT person (shown in the reference images).
-
-CRITICAL: The person's face, features, and identity must be IDENTICAL to the reference images.
-
-New image requirements:
-- Aspect ratio: 9:16 (vertical/portrait, 1080x1920)
-- FRAMING: Upper body / waist-up shot, facing the camera directly
-- EXPRESSION: Natural, confident, slight smile — like she's about to speak to the camera
-- EYE CONTACT: Looking directly at the camera
-- The person is shown: {description}
-- Photorealistic, natural lighting, shot on a phone camera
-- Single person in frame, face clearly visible and well-lit
-- This image will be used as a video avatar — the face must be sharp, centered, and unobstructed
-- NO text, NO signs, NO labels, NO watermarks in the image
-- NO sunglasses or anything covering the face
-
-Keep the face identical. Only change the outfit, setting, and pose."""
-
-    contents = ref_parts + [prompt_text]
-
-    response = client.models.generate_content(
-        model='gemini-2.5-flash-image',
-        contents=contents,
-        config=types.GenerateContentConfig(
-            response_modalities=['TEXT', 'IMAGE'],
-        )
-    )
-
-    # Extract image from response
-    if not response.candidates or not response.candidates[0].content:
-        reason = getattr(response.candidates[0], 'finish_reason', 'unknown') if response.candidates else 'no candidates'
-        print(f"    Gemini returned no content (reason: {reason})")
-        return None
-
-    for part in response.candidates[0].content.parts:
-        if part.inline_data and part.inline_data.mime_type.startswith('image/'):
-            print(f"    Avatar image generated ({len(part.inline_data.data)} bytes)")
-            return part.inline_data.data
-
-    print("    No image found in Gemini response")
-    return None
-
-
-def _compress_image_for_upload(image_bytes):
-    """Resize and compress image for Argil avatar upload.
-    Argil requires: 9:16 or 16:9 aspect ratio, 720p–4K resolution, max 10MB.
-    Server JSON body limit is small, so we target ~50KB JPEG (≈70KB base64)."""
-    from PIL import Image as PILImage
-    import io
-
-    img = PILImage.open(io.BytesIO(image_bytes))
-    # Resize to exactly 720x1280 (9:16 portrait, minimum 720p)
-    img = img.convert('RGB').resize((720, 1280), PILImage.LANCZOS)
-    # Compress as JPEG — try decreasing quality until under 50KB
-    for quality in (80, 65, 50, 35):
-        buf = io.BytesIO()
-        img.save(buf, format='JPEG', quality=quality)
-        data = buf.getvalue()
-        if len(data) <= 50_000:
-            print(f"    Resized to 720x1280, compressed: {len(image_bytes)} -> {len(data)} bytes (JPEG q={quality})")
-            return data, 'image/jpeg'
-    print(f"    Resized to 720x1280, compressed: {len(image_bytes)} -> {len(data)} bytes (JPEG q={quality})")
-    return data, 'image/jpeg'
-
-
-def _create_argil_avatar(image_bytes, name):
-    """Create a new Argil avatar from image bytes. Returns avatar dict or None."""
-    image_bytes, mime_type = _compress_image_for_upload(image_bytes)
-    b64 = base64.b64encode(image_bytes).decode('utf-8')
-
-    payload = {
-        'type': 'IMAGE',
-        'name': name,
-        'datasetImage': {'base64': f'data:{mime_type};base64,{b64}'},
-    }
-    if ARGIL_VOICE_ID:
-        payload['voiceId'] = ARGIL_VOICE_ID
-
-    try:
-        resp = requests.post(f'{ARGIL_BASE_URL}/avatars',
-                             headers=_argil_headers(), json=payload, timeout=60)
-    except requests.RequestException as e:
-        print(f"  Avatar creation request failed: {e}")
-        return None
-
-    if resp.status_code not in (200, 201):
-        print(f"  Avatar creation failed: {resp.status_code} {resp.text[:500]}")
-        return None
-
-    avatar = resp.json()
-    avatar_id = avatar['id']
-
-    # If already IDLE (no training needed), return immediately
-    if avatar.get('status') == 'IDLE':
-        print(f"    Avatar created and ready (id: {avatar_id[:12]}...)")
-        return avatar
-
-    print(f"    Avatar created, training started (id: {avatar_id[:12]}...)")
-
-    # Poll until IDLE (training complete, ~30s)
-    for i in range(20):  # max 5 min
-        time.sleep(15)
-        try:
-            resp = requests.get(f'{ARGIL_BASE_URL}/avatars/{avatar_id}',
-                               headers=_argil_headers(), timeout=30)
-            status = resp.json().get('status')
-        except requests.RequestException as e:
-            print(f"    Poll error: {e}")
-            continue
-        print(f"    Avatar training... status={status} ({(i+1)*15}s)")
-        if status == 'IDLE':
-            return resp.json()
-        if status in ('TRAINING_FAILED', 'REFUSED'):
-            print(f"  Avatar training failed: {status}")
-            return None
-
-    print(f"  Avatar training timeout")
-    return None
-
-
-def generate_argil_script(article_data):
-    """
-    Use Gemini to generate a script optimized for Argil's moments format.
-    Returns dict with 'script', 'moments' (list of transcript strings ≤250 chars), 'appearance'.
-    """
-    if not GEMINI_API_KEY:
-        print("  Error: GEMINI_API_KEY not set")
-        return None
-
-    client = genai.Client(api_key=GEMINI_API_KEY)
-
-    title = article_data.get('title', '')
-    excerpt = article_data.get('excerpt', '')
-    body = article_data.get('body_markdown', '')
-    categories = ', '.join(article_data.get('categories', []))
-    keywords = ', '.join(article_data.get('keywords', []))
-
-    # Load recent outfits to avoid repetition
-    previous_outfits = load_outfit_history()
-    outfit_context = ""
-    if previous_outfits:
-        outfit_context = "\n\nPREVIOUS OUTFITS TO AVOID:\n"
-        for i, outfit in enumerate(previous_outfits, 1):
-            outfit_context += f"{i}. {outfit}\n"
-        outfit_context += "\nDo NOT repeat any of these looks. Create something completely different.\n"
-
-    prompt = f"""Given this article, create a high-retention 22–26 second vertical short-form video script optimized for TikTok and Instagram Reels. Every video must maximize watch time, replays, and comments.
-
-ARTICLE TITLE: {title}
-ARTICLE SUMMARY: {excerpt}
-ARTICLE CONTENT (first 3000 chars): {body[:3000]}
-CATEGORIES: {categories}
-KEYWORDS: {keywords}
-{outfit_context}
-
-IMPORTANT: This script will be spoken by an AI avatar named Valentina. You are writing ONLY the spoken dialogue — the avatar system handles all visuals automatically. Focus 100% on making the SCRIPT compelling.
-
-AVATAR IMAGE NOTE: The "appearance" field you provide will be used to GENERATE AN ACTUAL PHOTO of Valentina via AI image generation. This photo becomes her avatar for the video. Write it as an image generation prompt — be specific about outfit, setting/background, pose, and vibe.
-
-VIDEO GOAL
-Create a direct-to-camera legal explainer where Valentina explains ONE key legal insight from the article.
-
-Tone must feel:
-• Smart
-• Human
-• Clear
-• Confident
-• Trustworthy
-• Playful, flirty, and confident
-
-HOOK (MANDATORY — FIRST 3 SECONDS MUST STOP THE SCROLL)
-The hook is the MOST IMPORTANT part of the video. If the first 3 seconds don't grab attention, nothing else matters.
-
-Before writing the script, select ONE hook style and build the first 3 seconds around it. Rotate styles across videos for variety.
-
-STYLE 1: CONTROVERSIAL / SHOCKING
-Bold claims, myth-busting, "everything you know is wrong" energy. Makes people stop to argue or agree.
-Examples:
-• "Your lawyer is probably lying to you about this."
-• "Most injury settlements are a scam — here's why."
-• "Nobody wants you to know this about your case."
-• "Stop trusting your insurance company. Seriously."
-
-STYLE 2: FLIRTY / PROVOCATIVE
-Lead with Valentina's personality. The innuendo IS the hook. Suggestive, confident, makes people watch to see where it's going.
-Examples:
-• "Let me tell you about the most satisfying settlement I've ever seen..."
-• "Some cases just need a more... hands-on approach."
-• "You'd be surprised how many people don't know how to get properly compensated."
-• "I've been thinking about this one all day..."
-
-STYLE 3: DRAMATIC / URGENT
-Breaking-news energy. Creates FOMO and fear of missing critical info.
-Examples:
-• "This new ruling just changed everything for injury victims."
-• "If you got hurt at work this year, you need to hear this right now."
-• "Something just happened that affects millions of people and nobody's talking about it."
-• "I just found out about this and I'm honestly shocked."
-
-HOOK EMOTION RULE
-The hook MUST trigger at least ONE:
-• Shock
-• Curiosity
-• Outrage
-• Disbelief
-• Intrigue
-• FOMO
-• Urgency
-• Concern
-
-If the hook doesn't trigger any of these → rewrite until it does.
-
-HOOK TEST: Would someone scrolling at full speed STOP for this? If not → make it bolder.
-
-UNIVERSAL UNDERSTANDING RULE (CRITICAL)
-Simplify the EXPLANATION, not the hook. The hook can be provocative and punchy — simplicity applies to the legal insight and information that follows.
-
-For the explanation sections (not the hook):
-• Rewrite legal concepts into plain everyday language
-• Use short sentences
-• Remove jargon
-• Use real life comparisons when helpful
-• A teenager and a stressed adult should both understand it after one listen
-
-PERFORMANCE STRUCTURE
-0–3 sec → Hook (scroll-stopping opener)
-3–8 sec → Problem or myth
-8–16 sec → Insight
-16–22 sec → Why it matters
-22–26 sec → Takeaway or closing thought
-
-HUMOR + SEXUAL INNUENDO RULE (REQUIRED)
-
-Valentina's personality is clever, witty, and subtly flirty. Sexual innuendo is a KEY part of her brand.
-
-INNUENDO REQUIREMENT:
-• Every video MUST include at least THREE sexual innuendos or double meanings
-• Use wordplay related to legal terminology
-• Deliver with natural confidence — these should CLEARLY land as double meanings
-• Spread them throughout: one near the hook (0–8s), one in the middle (8–18s), one near the close (18–26s)
-• Each innuendo must use DIFFERENT wordplay — never repeat the same type of double meaning
-
-Examples of GOOD legal innuendo:
-• "We'll handle your case personally and go deep into the details"
-• "Building a strong position takes time and the right approach"
-• "You need someone who knows how to work it from every angle"
-• "Getting satisfied with your settlement"
-• "We'll make sure you're fully covered"
-• "Let us take the load off your shoulders"
-• "Sometimes you need to go all the way to get what you deserve"
-• "We know how to get you into a really good position"
-• "It's all about knowing when to push harder"
-• "Trust me, size matters when it comes to your settlement"
-• "We like to get on top of these cases right away"
-• "The longer you wait, the harder it gets"
-• "We won't stop until you're completely satisfied with the outcome"
-• "Let us show you what a firm grip on your case looks like"
-
-Overall humor style:
-• Clever and witty
-• Confident and flirty
-• Bold but fun
-
-Guardrails:
-• Keep it fun, not vulgar — no crude or explicit language
-• No morbid, death, or injury jokes
-• Innuendo should make viewers laugh, not cringe
-
-CRITICAL: THREE innuendos per video is the MINIMUM. Each should clearly land as a double meaning. If you only wrote one or two, go back and add more. Do NOT reduce the count due to over-caution — this is Valentina's brand and viewers expect it.
-
-SPEECH FLOW RULE (CRITICAL)
-Valentina's dialogue must sound like natural, unscripted conversation.
-
-Dialogue pacing:
-• Pauses must be under 1 second — no silence longer than a natural breath. Dead air kills watch time.
-• NEVER leave gaps between sentences. Dialogue must flow continuously with no extended silence.
-• Speed variation: faster when excited about a point, slower when emphasizing something important
-• Occasional conversational filler woven in naturally ("honestly", "like", "here's the thing", "I mean")
-• Self-corrections and mid-thought pivots are good (e.g., "well actually—", "no wait, it's even worse—")
-• Use connecting words that sound natural, not rehearsed ("So get this...", "And the wild part is...", "But here's what nobody tells you...")
-
-Script structure:
-• Write as natural speech, not polished prose — include the imperfections real people have
-• Should sound like she's responding to someone who just asked "what's going on with this?"
-• Energy should fluctuate naturally — more animated for surprising parts, calmer for explanations
-• Occasional rhetorical questions to the viewer ("crazy, right?", "you'd think that's obvious, right?")
-
-If the script sounds like it could be a news anchor reading → rewrite to sound like a friend texting you but out loud.
-
-LENGTH RULE
-Script must sound natural when spoken in 22–26 seconds. Approximately 55–70 words total.
-
-NATURAL CLOSE (IMPORTANT)
-The video should end with a strong closing moment, not trail off or feel abrupt.
-
-Closing strategies (pick the best fit):
-• Punchy one-liner that summarizes the key insight
-• Rhetorical question that makes viewers think and drives comments
-• Relatable "what would you do?" moment
-• Callback to the hook (creates a loop effect that drives replays)
-• Confident closing statement
-• Valentina can mention casevalue.law casually if it fits, but NEVER as a pitch
-
-FINAL QA CHECK
-Before returning final JSON output:
-• All spelling is correct
-• No duplicated words
-• No broken sentences
-• Closing thought is strong and memorable
-• Script is understandable on first listen
-• No legal jargon remains
-• Sentences are short and natural
-• At least THREE innuendos are present
-
-OUTPUT FORMAT
-Return ONLY valid JSON.
-
-{{
-"script": "Full 22–26 second spoken script (~55–70 words). This is the COMPLETE dialogue Valentina will speak.",
-"moments": [
-"First segment of dialogue (max 250 characters). This is the hook — the first 3 seconds.",
-"Second segment continuing the dialogue (max 250 characters). Problem or myth.",
-"Third segment (max 250 characters). The insight.",
-"Fourth segment (max 250 characters). Why it matters + closing thought."
-],
-"appearance": "IMAGE GENERATION PROMPT: Describe Valentina in a specific outfit, setting, and pose for a 9:16 portrait photo. Must include: 1) Outfit details (style, colors, accessories), 2) Background/setting relevant to the article topic, 3) Pose: upper body facing camera with confident expression. Vary wildly from previous videos — different clothing style (streetwear/business/casual/athletic/edgy), different colors, different hairstyle, different setting. Be specific and creative. Example: 'Valentina in a fitted black blazer over a red silk camisole, hair in a sleek low ponytail, standing in front of a courthouse entrance with stone columns, warm afternoon light, confident slight smile, facing camera.'"
-}}
-
-MOMENT RULES:
-• Split the script into 4-6 natural segments at sentence or clause boundaries
-• Each moment MUST be ≤250 characters
-• Together, all moments must form the complete script — no words missing or added
-• Split at natural pause points (end of sentence, dramatic pause, topic shift)
-• The "script" field must be the exact concatenation of all moments
-"""
-
-    try:
-        response = client.models.generate_content(
-            model='gemini-3-flash-preview',
-            contents=prompt,
-            config={
-                'response_mime_type': 'application/json'
-            }
-        )
-
-        json_string = response.text.strip()
-
-        if json_string.startswith('```'):
-            json_string = re.sub(r'^```(?:json)?\s*\n?', '', json_string)
-            json_string = re.sub(r'\n?\s*```\s*$', '', json_string)
-
-        json_string = sanitize_json_control_chars(json_string)
-        script_data = json.loads(json_string)
-
-        # Validate required fields
-        if 'moments' not in script_data or not isinstance(script_data['moments'], list):
-            print("  Error: Script missing 'moments' array")
-            return None
-
-        if len(script_data['moments']) < 2:
-            print("  Error: Need at least 2 moments")
-            return None
-
-        # Validate moment lengths
-        for i, moment in enumerate(script_data['moments']):
-            if len(moment) > 250:
-                print(f"  Warning: Moment {i+1} is {len(moment)} chars (max 250), truncating")
-                script_data['moments'][i] = moment[:250]
-
-        print(f"  Argil script generated: {len(script_data['moments'])} moments, "
-              f"{len(script_data.get('script', ''))} chars total")
-        return script_data
-
-    except json.JSONDecodeError as e:
-        print(f"  Error parsing Argil script JSON: {e}")
-        return None
-    except Exception as e:
-        print(f"  Error generating Argil script: {e}")
-        return None
-
-
-def _create_and_render_argil_video(slug, script_data, avatar_id, available_gestures, style):
-    """Create an Argil video, render it, and poll until done.
-    Returns the video download URL, or None on failure."""
-    print(f"  Creating video on Argil (style: {style['name']})...")
-
-    moments = []
-    zoom_min, zoom_max = style['zoom_range']
-    for i, transcript in enumerate(script_data['moments']):
-        moment = {
-            'transcript': transcript,
-            'avatarId': avatar_id,
-            'zoom': {
-                'level': round(random.uniform(zoom_min, zoom_max), 2),
-            },
-        }
-        if ARGIL_VOICE_ID:
-            moment['voiceId'] = ARGIL_VOICE_ID
-        if available_gestures and i > 0 and random.random() < 0.5:
-            moment['gestureSlug'] = random.choice(available_gestures)
-        moments.append(moment)
-
-    payload = {
-        'name': f"CaseValue - {slug}",
-        'moments': moments,
-        'aspectRatio': '9:16',
-        'subtitles': {'enable': False},
-    }
-
-    if style['autoBrolls']:
-        payload['autoBrolls'] = style['autoBrolls']
-
-    try:
-        resp = requests.post(f'{ARGIL_BASE_URL}/videos',
-                             headers=_argil_headers(), json=payload, timeout=120)
-    except requests.RequestException as e:
-        print(f"    Argil API connection error: {e}")
-        return None
-
-    if resp.status_code not in (200, 201):
-        print(f"    Argil create failed: {resp.status_code} {resp.text[:500]}")
-        return None
-
-    video_data = resp.json()
-    video_id = video_data['id']
-    print(f"    Video created: {video_id}")
-
-    # Trigger render
-    print("    Starting render...")
-    try:
-        resp = requests.post(f'{ARGIL_BASE_URL}/videos/{video_id}/render',
-                             headers=_argil_headers(), timeout=30)
-    except requests.RequestException as e:
-        print(f"    Argil render connection error: {e}")
-        return None
-
-    if resp.status_code != 200:
-        print(f"    Argil render failed: {resp.status_code} {resp.text[:500]}")
-        return None
-
-    render_status = resp.json().get('status', 'unknown')
-    print(f"    Render started (status: {render_status})")
-    if render_status == 'FAILED':
-        print("    Render immediately failed")
-        return None
-
-    # Poll until DONE
-    print("    Waiting for video generation...")
-    for poll in range(ARGIL_MAX_POLLS):
-        time.sleep(ARGIL_POLL_INTERVAL)
-        try:
-            resp = requests.get(f'{ARGIL_BASE_URL}/videos/{video_id}',
-                               headers=_argil_headers(), timeout=30)
-        except requests.RequestException as e:
-            print(f"    Poll error: {e}")
-            continue
-
-        result = resp.json()
-        status = result.get('status')
-        elapsed = (poll + 1) * ARGIL_POLL_INTERVAL
-        print(f"    Polling... status={status} ({elapsed}s elapsed)")
-
-        if status == 'DONE':
-            return result.get('videoUrl')
-        if status == 'FAILED':
-            print(f"    Video generation FAILED")
-            return None
-
-    print(f"    Timeout after {ARGIL_MAX_POLLS * ARGIL_POLL_INTERVAL}s")
-    return None
-
-
-def generate_tiktok_video_argil(article_data):
-    """
-    Generate a TikTok video via Argil API.
-    Returns the file path to the saved video, or None on failure.
-    """
-    slug = article_data.get('slug', 'untitled')
-
-    # Step 1: Generate script via Gemini
-    print("  Step 1: Generating video script for Argil...")
-    script_data = generate_argil_script(article_data)
-    if not script_data:
-        return None
-
-    # Step 1.5: Generate a new avatar image using Gemini + reference images
-    print("  Step 1.5: Generating avatar image...")
-    appearance = script_data.get('appearance', '')
-    avatar_image = None
-    if appearance:
-        try:
-            avatar_image = _generate_avatar_image(appearance)
-        except Exception as e:
-            print(f"    Image generation failed: {e}")
-
-    # Step 1.6: Create avatar on Argil (or fall back to existing)
-    available_gestures = []
-    if avatar_image:
-        print("  Step 1.6: Creating new Argil avatar...")
-        avatar_name = f"Auto-{slug[:30]}"
-        avatar = _create_argil_avatar(avatar_image, avatar_name)
-        if avatar:
-            avatar_id = avatar['id']
-            print(f"    New avatar created: {avatar_name} (id: {avatar_id[:12]}...)")
-            available_gestures = [g['slug'] for g in avatar.get('gestures', []) if g.get('slug')]
-        else:
-            avatar_image = None  # fall through to existing avatars
-
-    if not avatar_image:
-        print("  Step 1.6: Falling back to existing Valentina avatars...")
-        valentinas = _fetch_valentina_avatars()
-        if not valentinas:
-            print("  No usable avatars found")
-            return None
-        selected = random.choice(valentinas)
-        avatar_id = selected['id']
-        print(f"    Selected: {selected['name']} (id: {avatar_id[:12]}...)")
-        # Fetch full avatar data to get gestures
-        try:
-            full_resp = requests.get(f'{ARGIL_BASE_URL}/avatars/{avatar_id}',
-                                      headers=_argil_headers(), timeout=30)
-            full_avatar = full_resp.json()
-            available_gestures = [g['slug'] for g in full_avatar.get('gestures', []) if g.get('slug')]
-        except Exception:
-            available_gestures = []
-
-    if available_gestures:
-        print(f"    Available gestures: {available_gestures}")
-
-    # Step 2: Create, render, and poll video on Argil
-    style = _pick_video_style()
-    video_url = _create_and_render_argil_video(
-        slug, script_data, avatar_id, available_gestures, style
-    )
-
-    # If autoBrolls style failed, retry with talking-head
-    if not video_url and style['autoBrolls']:
-        print("  Retrying as talking-head (no autoBrolls)...")
-        style = {'name': 'talking-head', 'autoBrolls': None, 'zoom_range': (1.0, 1.15)}
-        video_url = _create_and_render_argil_video(
-            slug, script_data, avatar_id, available_gestures, style
-        )
-
-    if not video_url:
-        return None
-
-    # Step 5: Download and save
-    print("  Step 5: Downloading video...")
-    output_path = os.path.join(VIDEOS_DIR, f"{slug}.mp4")
-    try:
-        dl_resp = requests.get(video_url, timeout=120)
-        dl_resp.raise_for_status()
-        with open(output_path, 'wb') as f:
-            f.write(dl_resp.content)
-    except Exception as e:
-        print(f"  Error downloading video: {e}")
-        return None
-
-    file_size = os.path.getsize(output_path)
-    print(f"  Video saved: {output_path} ({file_size / 1024 / 1024:.1f} MB)")
-
-    # Save outfit to history for future variation
-    try:
-        outfit = script_data.get('appearance', '')
-        if outfit:
-            save_outfit(outfit)
-    except Exception as e:
-        print(f"  Warning: Could not save outfit to history: {e}")
-
-    return output_path
 
 
 # ============================================================
@@ -866,7 +186,123 @@ def _flow_post_with_retry(url, payload, label="request"):
     return None, None
 
 
-def _flow_generate_clip(prompt, ref_ids=None):
+def _extract_image_from_response(result):
+    """Extract (mediaGenerationId, fifeUrl) from a useapi.net image response.
+    Response structure: result.media[0].image.generatedImage.{mediaGenerationId, fifeUrl}"""
+    media = result.get('media', [])
+    if not media:
+        media = result.get('response', {}).get('media', [])
+    if media and isinstance(media, list):
+        # Nested under media[0].image.generatedImage
+        gen_img = media[0].get('image', {}).get('generatedImage', {})
+        if gen_img:
+            img_id = gen_img.get('mediaGenerationId')
+            img_url = gen_img.get('fifeUrl')
+            if img_id:
+                return img_id, img_url
+        # Fallback: try flat structure
+        img_id = media[0].get('mediaGenerationId')
+        img_url = media[0].get('fifeUrl')
+        if img_id:
+            return img_id, img_url
+        print(f"    Image response missing mediaGenerationId: {list(media[0].keys())}")
+    else:
+        print(f"    No media in image response: {list(result.keys())}")
+    return None, None
+
+
+def _flow_post_image_with_retry(url, payload, label="image"):
+    """POST to a Flow image endpoint with retries on 403 captcha failures.
+    Returns (mediaGenerationId, fifeUrl) or (None, None)."""
+    for attempt in range(FLOW_CAPTCHA_RETRIES):
+        try:
+            resp = requests.post(url, headers=_flow_headers(), json=payload, timeout=60)
+        except requests.RequestException as e:
+            print(f"    Flow {label} error: {e}")
+            return None, None
+
+        if resp.status_code == 200:
+            return _extract_image_from_response(resp.json())
+
+        if resp.status_code == 201:
+            result = resp.json()
+            job_id = result.get('jobid') or result.get('jobId')
+            if not job_id:
+                print(f"    No jobid in async image response: {list(result.keys())}")
+                return None, None
+            print(f"    Image job queued: {job_id[:60]}...")
+            completed = _flow_poll_job(job_id)
+            if not completed:
+                return None, None
+            return _extract_image_from_response(completed)
+
+        if resp.status_code == 403 and 'reCAPTCHA' in resp.text:
+            if attempt < FLOW_CAPTCHA_RETRIES - 1:
+                print(f"    Captcha failed (attempt {attempt + 1}/{FLOW_CAPTCHA_RETRIES}), retrying...")
+                time.sleep(5)
+                continue
+            print(f"    Captcha failed after {FLOW_CAPTCHA_RETRIES} attempts")
+            return None, None
+
+        print(f"    Flow {label} failed: {resp.status_code} {resp.text[:500]}")
+        return None, None
+
+    return None, None
+
+
+def _flow_generate_scene_image(appearance_brief, ref_ids):
+    """Generate a face-matched image of Valentina using nano-banana-pro.
+    Uses reference images for character consistency. Face matching is #1 priority.
+    Returns mediaGenerationId or None."""
+    if not ref_ids:
+        print("    No reference IDs for scene image generation")
+        return None
+
+    prompt = f"""Generate a photorealistic image of the EXACT person shown in the reference images.
+
+PRIORITY #1 — FACE MATCHING (above all else):
+- Face, bone structure, skin texture, freckles, and features must be IDENTICAL to the reference images
+- If face accuracy and other instructions conflict, ALWAYS prioritize face accuracy
+- The person in this image must be immediately recognizable as the same individual in the references
+
+FRAMING: Medium close-up (chest and above), vertical 9:16 portrait
+EXPRESSION: Natural, confident, looking at camera, as if about to speak
+LIGHTING: Natural, well-lit face, phone camera quality
+BRIEF STYLING: {appearance_brief}
+
+RULES:
+- Single person, face clearly visible and well-lit
+- Photorealistic — shot on a phone camera
+- NO text, NO signs, NO watermarks
+- NO sunglasses or anything covering the face"""
+
+    payload = {
+        'prompt': prompt,
+        'model': 'nano-banana-pro',
+        'aspectRatio': 'portrait',
+        'count': 1,
+    }
+
+    if USEAPI_GOOGLE_EMAIL:
+        payload['email'] = USEAPI_GOOGLE_EMAIL
+
+    # Add reference images (nano-banana-pro supports up to 10)
+    for i, ref_id in enumerate(ref_ids, start=1):
+        payload[f'reference_{i}'] = ref_id
+
+    img_id, img_url = _flow_post_image_with_retry(
+        f'{USEAPI_BASE_URL}/images', payload, "scene-image"
+    )
+
+    if img_id:
+        print(f"    Scene image generated: {img_id[:40]}...")
+    else:
+        print("    Scene image generation failed")
+
+    return img_id, img_url
+
+
+def _flow_generate_clip(prompt, ref_ids=None, start_image_id=None):
     """Generate a single video clip via Google Flow.
     Returns (mediaGenerationId, video_url) or (None, None)."""
     payload = {
@@ -879,8 +315,10 @@ def _flow_generate_clip(prompt, ref_ids=None):
     if USEAPI_GOOGLE_EMAIL:
         payload['email'] = USEAPI_GOOGLE_EMAIL
 
-    # Add reference images for R2V mode (max 3)
-    if ref_ids:
+    # I2V mode (startImage) and R2V mode (referenceImage) are mutually exclusive
+    if start_image_id:
+        payload['startImage'] = start_image_id
+    elif ref_ids:
         for i, ref_id in enumerate(ref_ids[:3], start=1):
             payload[f'referenceImage_{i}'] = ref_id
 
@@ -974,23 +412,42 @@ def generate_tiktok_video_flow(article_data):
     print("  [Flow] Step 2: Uploading reference images...")
     ref_ids = _flow_upload_reference_images()
     if ref_ids:
-        print(f"    Got {len(ref_ids)} reference ID(s) for R2V mode")
+        print(f"    Got {len(ref_ids)} reference ID(s)")
 
-    # Step 3: Generate initial 8s clip with reference images
-    print("  [Flow] Step 3: Generating initial 8s clip...")
-    clip1_id, clip1_url = _flow_generate_clip(
-        video_prompt['initial_prompt'], ref_ids=ref_ids
-    )
+    # Step 3: Generate scene image with nano-banana-pro (face-matched)
+    scene_image_id = None
+    if ref_ids:
+        appearance_brief = video_prompt.get('appearance', 'casual athletic wear')
+        print(f"  [Flow] Step 3: Generating face-matched scene image (nano-banana-pro, mode={VIDEO_SEED_MODE})...")
+        scene_image_id, _scene_url = _flow_generate_scene_image(appearance_brief, ref_ids)
+        if not scene_image_id:
+            print("    Falling back to original reference images")
+
+    # Step 4: Generate initial 8s clip
+    print("  [Flow] Step 4: Generating initial 8s clip...")
+    if VIDEO_SEED_MODE == 'i2v' and scene_image_id:
+        # I2V mode: scene image becomes the first frame
+        clip1_id, clip1_url = _flow_generate_clip(
+            video_prompt['initial_prompt'], start_image_id=scene_image_id
+        )
+    else:
+        # R2V mode: use scene image as extra reference if available
+        all_refs = ref_ids[:]
+        if scene_image_id:
+            all_refs = ref_ids[:2] + [scene_image_id]
+        clip1_id, clip1_url = _flow_generate_clip(
+            video_prompt['initial_prompt'], ref_ids=all_refs
+        )
     if not clip1_id:
         print("  Initial clip generation failed")
         return None
     print(f"    Initial clip ready: {clip1_id[:40]}...")
 
-    # Step 4: Extend 2x with continuation prompts
+    # Step 5: Extend 2x with continuation prompts
     media_ids = [clip1_id]
     extension_prompts = video_prompt.get('extension_prompts', [])[:2]
     for i, ext_prompt in enumerate(extension_prompts):
-        print(f"  [Flow] Step {4 + i}: Extending clip ({i + 1}/{len(extension_prompts)})...")
+        print(f"  [Flow] Step {5 + i}: Extending clip ({i + 1}/{len(extension_prompts)})...")
         ext_id, ext_url = _flow_extend_clip(media_ids[-1], ext_prompt)
         if not ext_id:
             print(f"    Extension {i + 1} failed, using partial video")
@@ -998,13 +455,13 @@ def generate_tiktok_video_flow(article_data):
         media_ids.append(ext_id)
         print(f"    Extension {i + 1} ready: {ext_id[:40]}...")
 
-    # Step 5: Concatenate or download single clip
+    # Step 7: Concatenate or download single clip
     if len(media_ids) >= 2:
-        print(f"  [Flow] Step 6: Concatenating {len(media_ids)} clips...")
+        print(f"  [Flow] Step 7: Concatenating {len(media_ids)} clips...")
         video_data = _flow_concatenate(media_ids)
     else:
         # Only 1 clip — download directly from URL
-        print("  [Flow] Step 6: Downloading single clip...")
+        print("  [Flow] Step 7: Downloading single clip...")
         try:
             dl = requests.get(clip1_url, timeout=120)
             dl.raise_for_status()
@@ -1034,67 +491,6 @@ def generate_tiktok_video_flow(article_data):
         print(f"  Warning: Could not save outfit to history: {e}")
 
     return output_path
-
-
-# ============================================================
-#  VEO VIDEO GENERATION (LEGACY — kept for reference)
-# ============================================================
-
-def _load_spokesperson_images():
-    """Load all reference images from the assets directory (up to 3 for Veo)."""
-    if not os.path.exists(SPOKESPERSON_IMAGES_DIR):
-        print(f"  Warning: Assets directory not found at {SPOKESPERSON_IMAGES_DIR}")
-        print(f"  Video will be generated without character reference")
-        return []
-
-    images = []
-    for filename in sorted(os.listdir(SPOKESPERSON_IMAGES_DIR)):
-        ext = os.path.splitext(filename)[1].lower()
-        if ext not in _IMAGE_EXTENSIONS:
-            continue
-        filepath = os.path.join(SPOKESPERSON_IMAGES_DIR, filename)
-        try:
-            with open(filepath, 'rb') as f:
-                image_bytes = f.read()
-            mime_type = _MIME_TYPES.get(ext, 'image/jpeg')
-            images.append(types.Image(image_bytes=image_bytes, mime_type=mime_type))
-            print(f"  Loaded reference image: {filename}")
-        except Exception as e:
-            print(f"  Warning: Could not load {filename}: {e}")
-
-        if len(images) >= 3:  # Veo 3.1 supports max 3 reference images
-            break
-
-    if not images:
-        print(f"  Warning: No reference images found in {SPOKESPERSON_IMAGES_DIR}")
-    else:
-        print(f"  Loaded {len(images)} reference image(s)")
-
-    return images
-
-
-def _poll_video_operation(client, operation, label="video"):
-    """Poll a video generation operation until done or timeout."""
-    polls = 0
-    while not operation.done:
-        if polls >= MAX_POLLS:
-            print(f"    Timeout waiting for {label} after {polls * POLL_INTERVAL}s")
-            return None
-        time.sleep(POLL_INTERVAL)
-        operation = client.operations.get(operation)
-        polls += 1
-        elapsed = polls * POLL_INTERVAL
-        print(f"    Polling {label}... ({elapsed}s elapsed)")
-
-    if operation.error:
-        print(f"    {label} generation failed: {operation.error}")
-        return None
-
-    if not operation.result or not operation.result.generated_videos:
-        print(f"    {label} generation returned no video")
-        return None
-
-    return operation.result.generated_videos[0]
 
 
 def generate_video_prompt(article_data):
@@ -1136,7 +532,7 @@ def generate_video_prompt(article_data):
 VIDEO FORMAT: WALK AND TALK
 This video features Valentina walking while being filmed by a friend following alongside her.
 
-IMPORTANT: See PROSTHETIC LEG PLACEMENT section. Prosthetic is on the RIGHT side of the screen. Apply in all Veo prompts.
+IMPORTANT: See PROSTHETIC LEG PLACEMENT section. Prosthetic is on Valentina's LEFT leg (her anatomical left). Apply in all Veo prompts regardless of camera angle.
 IMPORTANT: Valentina must NOT be holding a phone or any device. Both hands are free for gesturing.
 
 Setting options (pick ONE):
@@ -1153,7 +549,7 @@ Camera style:
 • Vary framing throughout: tight shots for emphasis, wider shots to show her walking and prosthetic naturally
 
 Prosthetic visibility:
-• At least one or two wider shots naturally showing the prosthetic (right side of frame)
+• At least one or two wider shots naturally showing the prosthetic (on her left leg)
 • Present it naturally — not hidden, not spotlighted, just part of who she is
 • NEVER mention or reference the prosthetic in the dialogue
 
@@ -1164,12 +560,12 @@ Tone for walk-and-talk:
 • Slightly breathier/more dynamic delivery
 
 Movement description for Veo prompts:
-• Describe her walking naturally (steady pace, not rushing) with prosthetic visible on right side of frame
+• Describe her walking naturally (steady pace, not rushing) with prosthetic visible on her left leg
 • Friend filming walks alongside — camera has natural handheld sway from a walking person
 • Valentina's hands are FREE — she uses both hands for natural gestures while talking
 • Background changes/moves as she walks — include real-world activity (other people, traffic, ambient life)
-• Occasional wider angles show prosthetic on right side of frame, natural biological leg on left side of frame
-• Include at least 1-2 prompts with wider framing: "Camera pulls back showing Valentina walking, prosthetic visible on right side of frame, natural leg on left side of frame"
+• Occasional wider angles show the prosthetic on Valentina's left leg, natural biological right leg
+• Include at least 1-2 prompts with wider framing: "Camera pulls back showing Valentina walking, below-knee prosthetic on her left leg, natural biological right leg"
 • Environment should feel busy and real, not an empty path or sterile location"""
     elif video_format == 'static':
         format_context = """
@@ -1198,7 +594,7 @@ Tone for static:
 VIDEO FORMAT: LOCATION TOUR
 This video features Valentina at a TOPIC-RELEVANT location, filmed by a friend (third-person camera). She walks through the space, interacts with the environment, and explains the topic while the setting reinforces the content.
 
-IMPORTANT: See PROSTHETIC LEG PLACEMENT section. Prosthetic on RIGHT side of screen when facing camera. Apply in wider shots. NEVER mention in dialogue.
+IMPORTANT: See PROSTHETIC LEG PLACEMENT section. Prosthetic is on Valentina's LEFT leg (her anatomical left), regardless of camera angle. Apply in wider shots. NEVER mention in dialogue.
 
 Camera style:
 • Third-person filming — a friend is following and filming her
@@ -1245,12 +641,12 @@ PHYSICAL IDENTITY RULE (ABSOLUTE — DO NOT VIOLATE)
 Valentina's physical features MUST be consistent across every segment and every video.
 
 PROSTHETIC LEG PLACEMENT (ABSOLUTE):
-• Valentina has a below-knee prosthetic leg
-• The prosthetic is ALWAYS on the RIGHT side of the screen (viewer's right)
-• The LEFT side of the screen ALWAYS shows a natural biological leg — no prosthetic, no metal, no artificial limb on the left side of frame
-• In Veo prompts, ONLY use screen-relative language: "prosthetic on the right side of frame"
-• NEVER write "left leg" or "right leg" in Veo prompts — use "right side of frame" and "left side of frame" only
-• Every Veo prompt must include BOTH: positive ("prosthetic on right side of frame") AND negative ("natural leg on left side of frame, no prosthetic")
+• Valentina has a below-knee prosthetic on her LEFT leg (her anatomical left)
+• Her RIGHT leg is always a natural biological leg — no prosthetic, no metal, no artificial limb on her right leg
+• In Veo prompts, use anatomical/character-relative language: "Valentina's left leg has a below-knee prosthetic" — this is camera-angle-agnostic
+• NEVER use screen-relative language like "right side of frame" for prosthetic placement — camera angles change, anatomy does not
+• Every Veo prompt must include BOTH: positive ("Valentina's left leg has a below-knee prosthetic") AND negative ("her right leg is natural, no prosthetic on her right leg")
+• This applies regardless of camera angle — whether she faces toward, away from, or sideways to the camera, her left leg is always the prosthetic
 
 IDENTIFYING FEATURES CONSISTENCY:
 • All tattoos must remain in the same placement, size, and design across every segment
@@ -1379,50 +775,30 @@ PERFORMANCE STRUCTURE
 
 HUMOR + SEXUAL INNUENDO RULE (REQUIRED)
 
-Valentina's personality is clever, witty, and subtly flirty. Sexual innuendo is a KEY part of her brand.
+Valentina's personality is clever, witty, and unapologetically flirty. Sexual innuendo is a KEY part of her brand — she's bold and doesn't hold back.
 
 INNUENDO REQUIREMENT:
-• Every video MUST include at least THREE sexual innuendos or double meanings
-• Use wordplay related to legal terminology
-• Deliver with natural confidence — these should CLEARLY land as double meanings
-• Spread them throughout: one near the hook (0–8s), one in the middle (8–18s), one near the close (18–26s)
-• Each innuendo must use DIFFERENT wordplay — never repeat the same type of double meaning
-• Vary delivery across the three: knowing pause, playful smile, raised eyebrow, amused glance
+• Every video MUST include at least ONE strong sexual innuendo or double meaning
+• More is welcome if they land naturally — don't force extras
+• Each innuendo must be UNIQUE — never reuse phrasing from previous videos
 
-Examples of GOOD legal innuendo:
-• "We'll handle your case personally and go deep into the details"
-• "Building a strong position takes time and the right approach"
-• "You need someone who knows how to work it from every angle"
-• "Getting satisfied with your settlement"
-• "We'll make sure you're fully covered"
-• "Let us take the load off your shoulders"
-• "Sometimes you need to go all the way to get what you deserve"
-• "We know how to get you into a really good position"
-• "It's all about knowing when to push harder"
-• "Trust me, size matters when it comes to your settlement"
-• "We like to get on top of these cases right away"
-• "The longer you wait, the harder it gets"
-• "We won't stop until you're completely satisfied with the outcome"
-• "Let us show you what a firm grip on your case looks like"
+INNUENDO TYPES (vary across videos — don't always use the same type):
+• Legal-term double meanings (e.g., "firm grip on your case", "go all the way")
+• Physical/body humor tied to the topic or setting
+• Situational innuendo — something about the specific scenario that sounds suggestive
+• Innocent phrase delivered with a knowing look that makes it suggestive
+• Callback innuendo — revisit something said earlier with a new suggestive context
 
 Innuendo delivery:
 • Each innuendo should be a MOMENT — slight pause, knowing look, let it land
-• Delivered with a clear knowing look, playful pause, or wink-wink tone
-• Viewers SHOULD catch the suggestive level — these are entertainment, not hidden easter eggs
-• Should make viewers smile and want to comment
-• Three different innuendos = three different moments of humor — space them out so each one lands
+• Delivered with confidence — she knows exactly what she's saying
+• Viewers SHOULD catch the double meaning — these are entertainment, not hidden
+• Should make viewers smile, laugh, or comment
 
 Overall humor style:
 • Clever and witty
-• Confident and flirty
-• Bold but fun
-
-Guardrails:
-• Keep it fun, not vulgar — no crude or explicit language
-• No morbid, death, or injury jokes
-• Innuendo should make viewers laugh, not cringe
-
-CRITICAL: THREE innuendos per video is the MINIMUM. Each should clearly land as a double meaning. If you only wrote one or two, go back and add more. Do NOT reduce the count due to over-caution — this is Valentina's brand and viewers expect it.
+• Confident and sexually bold
+• The kind of humor that makes you rewatch to catch what she said
 
 AUDIO RULE
 Valentina dialogue is the ONLY audio.
@@ -1592,7 +968,7 @@ Human Realism
 • Skin texture realistic (not plastic or melted)
 
 Physical Identity Consistency (CRITICAL)
-• Prosthetic is on RIGHT side of screen — if it appears on left side of screen → FIX IMMEDIATELY
+• Prosthetic is on Valentina's LEFT leg (her anatomical left) — if it appears on her right leg → FIX IMMEDIATELY
 • All tattoos consistent in placement, size, and design across every segment
 • Freckles, sunspots, moles consistent — never appearing/disappearing between segments
 • All identifying features match reference images
@@ -1636,19 +1012,21 @@ Unnatural human
 
 → Must revise prompts before output.
 
+DIALOGUE SPLITTING RULE (CRITICAL)
+The full script MUST be split across the initial_prompt and exactly 2 extension_prompts. Each prompt MUST contain its exact dialogue portion in "quotes". If any prompt has no quoted dialogue, the video will have silent dead air — this is a failure. Split the script roughly evenly (~20 words per segment for a 60-word script).
+
 OUTPUT FORMAT
 Return ONLY valid JSON.
 
 {{
 "script": "Full 22–26 second spoken script (~55–70 words)",
-"appearance": "Completely unique outfit that is NOTICEABLY DIFFERENT from previous videos. Vary: clothing style (streetwear/business/casual/athletic/edgy), colors, accessories, hairstyle, makeup vibe. Be specific and creative. Reference images show one look but you MUST describe a different appearance for variety.",
+"appearance": "Describe Valentina's outfit and look for this video. STYLE GUIDE: Athleisure meets professional casual. Tops must be form-fitting with low necklines (V-necks, scoop necks, ribbed tanks, wrap tops) — bust accentuated. Bottoms: fitted leggings, joggers, or tailored jeans. Colors: neutrals and earth tones (black, white, cream, beige, olive, tan, charcoal, rust, sage). Hair: always long black wavy hair, styling can vary (down, ponytail, half-up, loose braid). Accessories: minimal — small earrings, simple chain necklace, or a watch only. Footwear: sneakers, ankle boots, or sandals. NEVER: costumes, corporate suits, glasses, hats, scarves. Must differ from previous outfits listed above — vary the specific top style, bottom, colors, and hair styling while staying within the style guide.",
 "actions": "Highly specific gestures tied to exact words being spoken.",
 "setting": "Visually interesting environment relevant to topic.",
-"initial_prompt": "Veo prompt for first 6–8 seconds. Include full scene, lighting, camera framing, dialogue in quotes, and gestures tied to specific words.",
+"initial_prompt": "Veo prompt for first 8 seconds. MUST include the first ~20 words of dialogue in quotes. Include full scene, lighting, camera framing, and gestures tied to specific dialogue words.",
 "extension_prompts": [
-"Seconds 8–14: Dialogue starts IMMEDIATELY — no pause at the start. Continue from the EXACT frame where the previous segment ended (same position, lighting, background, framing). Valentina continues [same format], speaking naturally with dialogue in quotes. Gestures tied to specific words.",
-"Seconds 14–20: Dialogue starts IMMEDIATELY — no pause at the start. Continue from the EXACT frame where the previous segment ended (same position, lighting, background, framing). Valentina maintains continuous presence [walking/stationary], emotional tone matching dialogue in quotes. Natural flow. [If walking: background progresses naturally. If static: no scene changes.]",
-"Seconds 20–26: Dialogue starts IMMEDIATELY — no pause at the start. Continue from the EXACT frame where the previous segment ended (same position, lighting, background, framing). Valentina wraps up with a memorable closing moment — a punchy takeaway, a thought-provoking rhetorical question, or a callback to the hook. She can mention casevalue.law casually if it fits naturally, but NO sales pitch. Slightly warmer energy but same personality. End like she's finishing a great conversation with a friend."
+"Seconds 8–16: MUST include the next ~20 words of dialogue in exact quotes. Dialogue starts IMMEDIATELY — no pause at the start. Continue from the EXACT frame where the previous segment ended (same position, lighting, background, framing). Specific gestures tied to specific dialogue words.",
+"Seconds 16–24: MUST include the final ~20 words of dialogue in exact quotes. Dialogue starts IMMEDIATELY — no pause at the start. Continue from the EXACT frame where the previous segment ended (same position, lighting, background, framing). Closing moment with emotional delivery and strong ending."
 ]
 }}
 
@@ -1683,17 +1061,21 @@ Every video must vary:
 • Gesture style
 
 REFERENCE IMAGE OVERRIDE RULE (CRITICAL)
-The reference images show Valentina with one specific look, but you MUST create varied appearances.
+The reference images show Valentina with one specific look, but you MUST create varied appearances within her style guide.
 
-For the "appearance" field:
-• Describe a DIFFERENT outfit style than previous videos
-• Specify different colors, different clothing types
-• Vary hairstyle: down, up, ponytail, bun, curly, straight, braided
-• Vary accessories: jewelry, glasses, hats, scarves
-• Vary makeup: natural, bold, minimal, colorful
+For the "appearance" field — follow Valentina's STYLE GUIDE:
+• Athleisure meets professional casual — sporty, polished, approachable
+• Tops: ALWAYS form-fitting with low necklines (V-necks, scoop necks, ribbed tanks, wrap tops) — bust accentuated
+• Bottoms: fitted leggings, joggers, tailored jeans, fitted trousers
+• Colors: neutrals and earth tones ONLY — black, white, cream, beige, olive, tan, charcoal, rust, sage, gray
+• Hair: ALWAYS long black wavy hair — vary styling only (down, ponytail, half-up, loose braid, swept to one side)
+• Accessories: minimal jewelry ONLY — small earrings, simple chain/necklace, maybe a watch. NO glasses, hats, or scarves
+• Footwear: clean sneakers, ankle boots, or sandals depending on setting
+• NEVER: costumes, themed outfits, corporate suits, heavy formal wear
+• Vary the specific pieces within these constraints — different top style, different bottom, different color combo, different hair styling
 
 The reference images are for facial features only — NOT for outfit/hair consistency.
-Be bold and creative with the appearance variation.
+Be creative within the style constraints above.
 """
 
     try:
@@ -1725,40 +1107,41 @@ Be bold and creative with the appearance variation.
             print(f"  Error: extension_prompts is not a list")
             return None
 
-        # Post-process: sandwich critical rules into every Veo prompt
-        # 1. Prosthetic placement
-        # 2. No text/UI/phone screens
-        # 3. Continuity between extensions
-        # 4. Appearance consistency
+        # Validate dialogue presence in all prompt segments
+        dialogue_re = re.compile(r'"[^"]{10,}"')
+        all_prompts = [video_prompt.get('initial_prompt', '')] + video_prompt.get('extension_prompts', [])
+        for idx, p in enumerate(all_prompts):
+            if not dialogue_re.search(p):
+                segment_name = "initial" if idx == 0 else f"extension {idx}"
+                print(f"  Warning: {segment_name} prompt has no quoted dialogue — video may have silent sections")
+
+        # Post-process: inject critical rules into every Veo prompt
         appearance_desc = video_prompt.get('appearance', '')
 
-        veo_prefix = (
-            "ABSOLUTE RULES: "
-            "Prosthetic leg on RIGHT side of screen only. Natural leg on LEFT side of screen — no prosthetic on left side. "
-            "NO text, NO subtitles, NO captions, NO phone screens, NO UI overlays, NO graphics of any kind in the video. "
-            "NO phones visible in Valentina's hands or in the frame. "
-        )
-        veo_suffix = (
-            " REMINDERS: Prosthetic on RIGHT side of screen only. No prosthetic on LEFT side. "
-            "ZERO text, subtitles, captions, phone screens, or UI overlays. No phones in frame. "
-            "This must look like raw camera footage with no post-production overlays."
+        # Condensed rules (no redundant suffix — single injection)
+        veo_rules = (
+            "RULES: Valentina's LEFT leg has below-knee prosthetic, RIGHT leg is natural. "
+            "ZERO text/subtitles/captions/UI/phones in frame. Raw phone footage look. "
         )
 
-        # For extensions, add continuity + appearance
+        # Extension prefix adds face lock + continuity (since extensions can't use reference images)
         ext_prefix = (
-            veo_prefix
-            + "CONTINUITY: Continue from the EXACT frame where the previous segment ended — same body position, same lighting, same background, same camera angle. No visible cut or transition. "
+            veo_rules
+            + "FACE LOCK: Same exact person as previous segment — Latina woman, defined cheekbones, "
+            "warm brown skin with freckles, brown eyes, long black wavy hair. "
+            "Face MUST match previous clip exactly. "
+            + "CONTINUITY: Continue from EXACT end frame — same position, lighting, background, angle. No visible cut. "
         )
         if appearance_desc:
             ext_prefix += f"APPEARANCE: {appearance_desc} "
 
         if video_prompt.get('initial_prompt'):
+            initial_prefix = veo_rules
             if appearance_desc:
-                video_prompt['initial_prompt'] = veo_prefix + f"APPEARANCE: {appearance_desc} " + video_prompt['initial_prompt'] + veo_suffix
-            else:
-                video_prompt['initial_prompt'] = veo_prefix + video_prompt['initial_prompt'] + veo_suffix
+                initial_prefix += f"APPEARANCE: {appearance_desc} "
+            video_prompt['initial_prompt'] = initial_prefix + video_prompt['initial_prompt']
         for idx, ext in enumerate(video_prompt.get('extension_prompts', [])):
-            video_prompt['extension_prompts'][idx] = ext_prefix + ext + veo_suffix
+            video_prompt['extension_prompts'][idx] = ext_prefix + ext
 
         print(f"  Video script generated ({len(video_prompt.get('script', ''))} chars)")
         return video_prompt
@@ -1768,131 +1151,6 @@ Be bold and creative with the appearance variation.
         return None
     except Exception as e:
         print(f"  Error generating video prompt: {e}")
-        return None
-
-
-def generate_tiktok_video_veo(article_data):
-    """
-    Generate a ~30 second TikTok spokesperson video via Veo 3.1.
-    Returns the file path to the saved video, or None on failure.
-    """
-    slug = article_data.get('slug', 'untitled')
-
-    if not GEMINI_API_KEY:
-        print("  Error: GEMINI_API_KEY not set, skipping Veo video generation")
-        return None
-
-    client = genai.Client(api_key=GEMINI_API_KEY)
-
-    # Step 1: Generate video prompt via Gemini
-    print("  [Veo] Step 1: Generating video script and prompts...")
-    video_prompt = generate_video_prompt(article_data)
-    if not video_prompt:
-        return None
-
-    # Step 2: Load reference images
-    print("  [Veo] Step 2: Loading spokesperson reference images...")
-    spokesperson_images = _load_spokesperson_images()
-    reference_images = []
-    for img in spokesperson_images:
-        reference_images.append(
-            types.VideoGenerationReferenceImage(
-                image=img,
-                reference_type="ASSET",
-            )
-        )
-
-    # Step 3: Generate initial 8-second clip
-    print(f"  [Veo] Step 3: Generating initial {INITIAL_DURATION}s clip...")
-    config = types.GenerateVideosConfig(
-        aspect_ratio="16:9",
-        resolution="720p",
-        duration_seconds=INITIAL_DURATION,
-    )
-    if reference_images:
-        config.reference_images = reference_images
-
-    operation = client.models.generate_videos(
-        model="veo-3.1-generate-preview",
-        prompt=video_prompt['initial_prompt'],
-        config=config,
-    )
-
-    generated = _poll_video_operation(client, operation, "initial clip")
-    if not generated:
-        return None
-
-    current_video = generated.video
-    print(f"    Initial clip generated successfully")
-
-    # Step 4: Extend 3 times (with processing delay and retry)
-    extension_prompts = video_prompt.get('extension_prompts', [])[:NUM_EXTENSIONS]
-    for i, ext_prompt in enumerate(extension_prompts):
-        ext_num = i + 1
-        print(f"  [Veo] Step {3 + ext_num}: Generating extension {ext_num}/{NUM_EXTENSIONS}...")
-
-        # Wait for server-side video processing before extending
-        print(f"    Waiting {EXTENSION_PROCESS_DELAY}s for video processing...")
-        time.sleep(EXTENSION_PROCESS_DELAY)
-
-        ext_success = False
-        for retry in range(EXTENSION_MAX_RETRIES + 1):
-            try:
-                ext_config = types.GenerateVideosConfig(
-                    resolution="720p",
-                    number_of_videos=1,
-                )
-
-                operation = client.models.generate_videos(
-                    model="veo-3.1-generate-preview",
-                    prompt=ext_prompt,
-                    video=current_video,
-                    config=ext_config,
-                )
-
-                generated = _poll_video_operation(client, operation, f"extension {ext_num}")
-                if not generated:
-                    print(f"    Extension {ext_num} failed, saving partial video")
-                    break
-
-                current_video = generated.video
-                print(f"    Extension {ext_num} completed")
-                ext_success = True
-                break
-            except Exception as e:
-                error_str = str(e)
-                if 'INVALID_ARGUMENT' in error_str and retry < EXTENSION_MAX_RETRIES:
-                    print(f"    Extension {ext_num} not ready (attempt {retry + 1}), waiting {EXTENSION_PROCESS_DELAY}s...")
-                    time.sleep(EXTENSION_PROCESS_DELAY)
-                else:
-                    print(f"    Extension {ext_num} error: {e}")
-                    print(f"    Saving partial video with {i} extension(s)")
-                    break
-
-        if not ext_success:
-            break
-
-    # Step 5: Save the video
-    output_path = os.path.join(VIDEOS_DIR, f"{slug}.mp4")
-    try:
-        if not current_video.video_bytes:
-            print(f"  Downloading video from remote...")
-            client.files.download(file=current_video)
-        current_video.save(output_path)
-        file_size = os.path.getsize(output_path)
-        print(f"  Video saved: {output_path} ({file_size / 1024 / 1024:.1f} MB)")
-
-        # Save outfit to history for future variation
-        try:
-            outfit = video_prompt.get('appearance', '')
-            if outfit:
-                save_outfit(outfit)
-        except Exception as e:
-            print(f"  Warning: Could not save outfit to history: {e}")
-
-        return output_path
-    except Exception as e:
-        print(f"  Error saving video: {e}")
         return None
 
 

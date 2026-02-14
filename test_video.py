@@ -5,7 +5,18 @@ Usage: python test_video.py
 """
 
 import os
+import sys
 import requests
+from pathlib import Path
+
+# Load .env file
+env_file = Path(__file__).parent / '.env'
+if env_file.exists():
+    for line in env_file.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith('#') and '=' in line:
+            key, _, value = line.partition('=')
+            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 from auto_post.config import SANITY_PROJECT_ID, SANITY_TOKEN, SANITY_DATASET
 from auto_post.video import generate_tiktok_video
@@ -39,6 +50,8 @@ def main():
     print("=" * 60)
     print("  TikTok Video Generation Test")
     print("=" * 60)
+    print(f"  VIDEO_SEED_MODE: {os.environ.get('VIDEO_SEED_MODE', 'i2v')}")
+    sys.stdout.flush()
 
     # Verify env vars
     if not SANITY_PROJECT_ID or not SANITY_TOKEN:
@@ -74,6 +87,7 @@ def main():
 
     # Generate the video
     print("\n" + "=" * 60)
+    sys.stdout.flush()
     video_path = generate_tiktok_video(article_data)
 
     print("\n" + "=" * 60)
