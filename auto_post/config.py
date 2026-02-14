@@ -22,6 +22,16 @@ SANITY_HEADERS = {
 # --- GEMINI CONFIGURATION ---
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
 
+# --- ARGIL CONFIGURATION ---
+ARGIL_API_KEY = os.environ.get('ARGIL_API_KEY', '')
+ARGIL_VOICE_ID = os.environ.get('ARGIL_VOICE_ID', '')
+ARGIL_BASE_URL = 'https://api.argil.ai/v1'
+
+# --- USEAPI.NET (GOOGLE FLOW) CONFIGURATION ---
+USEAPI_TOKEN = os.environ.get('USEAPI_TOKEN', '')
+USEAPI_GOOGLE_EMAIL = os.environ.get('USEAPI_GOOGLE_EMAIL', '')
+USEAPI_BASE_URL = 'https://api.useapi.net/v1/google-flow'
+
 # --- VIDEO GENERATION CONFIGURATION ---
 ENABLE_VIDEO_GENERATION = os.environ.get('ENABLE_VIDEO_GENERATION', 'true').lower() == 'true'
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

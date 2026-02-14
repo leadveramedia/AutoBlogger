@@ -20,9 +20,12 @@ auto_post/
 ├── config.py          # Configuration, API keys, news sources, keywords
 ├── scrapers.py        # News scraper functions for each source
 ├── content.py         # AI content generation (Gemini) and image generation (Imagen)
+├── video.py           # TikTok video generation via useapi.net Google Flow (Veo 3.1)
 ├── sanity.py          # Sanity CMS API integration
 ├── curation.py        # Source health tracking and auto-curation
 └── utils.py           # Utility functions (title list, topic tracking)
+assets/                # Spokesperson reference images (Valentina) for video R2V
+videos/                # Generated MP4 output (gitignored)
 ```
 
 ## Key Files
@@ -51,11 +54,25 @@ AI-powered content generation:
 - `generate_image_with_gemini()` - Generates featured images using Imagen 4
 - `detect_text_in_image()` - Validates generated images have no text (auto-retries if text detected)
 
+### `auto_post/video.py`
+TikTok video generation using useapi.net Google Flow wrapper around Veo 3.1:
+- `generate_tiktok_video()` - Router entry point, calls Flow pipeline
+- `generate_video_prompt()` - Uses Gemini to generate video prompts (initial + 2 extension prompts)
+- `_flow_upload_reference_images()` - Uploads spokesperson images from `assets/` as Flow assets (R2V mode)
+- `_flow_generate_clip()` - Generates initial 8s clip with reference images
+- `_flow_extend_clip()` - Extends a clip by ~8s
+- `_flow_concatenate()` - Combines 3 clips into final video (trims 1s overlap on extensions)
+- `_flow_post_with_retry()` - POST with 3 retries on captcha failures
+- `_flow_poll_job()` - Polls async job until completed/failed
+
+**Video pipeline**: Generate prompts → upload refs → 8s clip (R2V) → extend 2x → concatenate → ~20s MP4
+
 ### `auto_post/config.py`
 Configuration constants:
 - `NEWS_SOURCES` - List of news sources with URLs and scraper mappings
 - `PRACTICE_AREA_KEYWORDS` - Keywords for filtering general news
 - `VALID_CATEGORIES` - Blog post categories
+- `USEAPI_TOKEN`, `USEAPI_GOOGLE_EMAIL`, `USEAPI_BASE_URL` - useapi.net Flow config
 
 ### `auto_post/sanity.py`
 Sanity CMS integration:
@@ -69,13 +86,16 @@ Sanity CMS integration:
 GEMINI_API_KEY        # Google Gemini API key (for AI content generation)
 SANITY_PROJECT_ID     # Sanity.io project ID
 SANITY_TOKEN          # Sanity.io API token
+USEAPI_TOKEN          # useapi.net Bearer token (for video generation via Google Flow)
+USEAPI_GOOGLE_EMAIL   # Google account email registered with useapi.net
 ```
 
 **Optional:**
 ```
 SANITY_DATASET        # Sanity dataset (default: production)
 DEFAULT_AUTHOR        # Author name (default: Case Value Expert)
-ENABLE_IMAGE_GENERATION  # Set to 'false' to disable images
+ENABLE_IMAGE_GENERATION   # Set to 'false' to disable images
+ENABLE_VIDEO_GENERATION   # Set to 'false' to disable video generation (default: true)
 ```
 
 ## Data Files
@@ -123,9 +143,32 @@ Articles have 6 required sections:
 5. Legal Framework (applicable laws)
 6. Get Help (call-to-action)
 
+### Video Generation (useapi.net Google Flow)
+Videos are generated via useapi.net, a REST API wrapper around Google Flow (Veo 3.1 Fast):
+- **Model**: `veo-3.1-fast` with R2V (reference-to-video) for character consistency
+- **Spokesperson**: "Valentina" — reference images stored in `assets/`
+- **Pipeline**: 3 clips (initial 8s + 2 extensions ~8s each) concatenated to ~20s
+- **Captcha**: AntiCaptcha configured as captcha provider (required for generation endpoints)
+- **Formats**: Static presenter, walk-and-talk, location-tour — all handled by prompt variation
+- **Cost**: ~5 cents/clip via Gemini Ultra subscription (25,000 credits/month)
+
+**Key API quirks** (discovered during integration):
+- Response field is `jobid` (lowercase), not `jobId`
+- Operations are nested at `result.response.operations`, not `result.operations`
+- `/videos/extend` and `/videos/concatenate` do NOT accept `email` parameter (only `/videos` does)
+- Concatenation returns `encodedVideo` (base64), not a URL
+- Captcha failures (403) are intermittent — retry logic with 3 attempts handles this
+
 ## Important Notes
 
 - The system filters for **today's news only** to keep content timely
 - `used_topics.json` prevents duplicate articles about the same news story
 - Source health tracking auto-disables scrapers that fail repeatedly
 - Internal links are pulled from existing Sanity posts for SEO
+
+## Operational Notes
+
+- **useapi.net Google account**: Do NOT log into the registered Google account (`rshao@mcnicholaslaw.com`) in any browser after registration — this invalidates the useapi.net session cookies
+- **AntiCaptcha**: Keep the AntiCaptcha balance topped up — video generation fails without working captcha solving
+- **GitHub Secrets**: `USEAPI_TOKEN` and `USEAPI_GOOGLE_EMAIL` must be set in repo secrets for CI
+- **Argil/Veo SDK**: Legacy dead code remains in `video.py` but is not called — the router only uses the Flow path

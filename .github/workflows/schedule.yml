@@ -35,11 +35,26 @@ jobs:
         SANITY_TOKEN: ${{ secrets.SANITY_TOKEN }}
         SANITY_PROJECT_ID: ${{ secrets.SANITY_PROJECT_ID }}
         SANITY_DATASET: ${{ secrets.SANITY_DATASET }}
+        ARGIL_API_KEY: ${{ secrets.ARGIL_API_KEY }}
+        ARGIL_VOICE_ID: ${{ secrets.ARGIL_VOICE_ID }}
+        USEAPI_TOKEN: ${{ secrets.USEAPI_TOKEN }}
+        USEAPI_GOOGLE_EMAIL: ${{ secrets.USEAPI_GOOGLE_EMAIL }}
+
+    - name: Upload videos to Google Drive
+      if: hashFiles('videos/*.mp4') != ''
+      run: |
+        curl -s https://rclone.org/install.sh | sudo bash
+        mkdir -p ~/.config/rclone
+        echo "$RCLONE_CONFIG" > ~/.config/rclone/rclone.conf
+        rclone copy videos/ gdrive:${{ secrets.GOOGLE_DRIVE_FOLDER_ID }} --include "*.mp4" -v
+        rm -f ~/.config/rclone/rclone.conf
+      env:
+        RCLONE_CONFIG: ${{ secrets.RCLONE_CONFIG }}
 
     - name: Commit updated tracking files
       run: |
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
-        git add titles.json used_topics.json videos/*.mp4
-        git diff --staged --quiet || git commit -m "Update tracking files and videos after blog generation"
+        git add titles.json used_topics.json
+        git diff --staged --quiet || git commit -m "Update tracking files after blog generation"
         git push
