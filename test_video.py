@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Test script to generate a TikTok video from an existing Sanity article.
-Usage: python test_video.py
+Usage: python test_video.py [slug]
 """
 
 import os
@@ -22,9 +22,12 @@ from auto_post.config import SANITY_PROJECT_ID, SANITY_TOKEN, SANITY_DATASET
 from auto_post.video import generate_tiktok_video
 
 
-def fetch_recent_article():
-    """Fetch the most recent article from Sanity with full details."""
-    query = '*[_type == "blogPost"] | order(publishedAt desc) [0] {title, "slug": slug.current, excerpt, "body_markdown": body, "meta_title": seo.metaTitle, "meta_description": seo.metaDescription, "keywords": seo.keywords, categories}'
+def fetch_article(slug=None):
+    """Fetch an article from Sanity by slug, or the most recent if no slug given."""
+    if slug:
+        query = f'*[_type == "blogPost" && slug.current == "{slug}"][0] {{title, "slug": slug.current, excerpt, "body_markdown": body, "meta_title": seo.metaTitle, "meta_description": seo.metaDescription, "keywords": seo.keywords, categories}}'
+    else:
+        query = '*[_type == "blogPost"] | order(publishedAt desc) [0] {title, "slug": slug.current, excerpt, "body_markdown": body, "meta_title": seo.metaTitle, "meta_description": seo.metaDescription, "keywords": seo.keywords, categories}'
     query_url = f"https://{SANITY_PROJECT_ID}.api.sanity.io/v2021-06-07/data/query/{SANITY_DATASET}"
     encoded_query = requests.utils.quote(query)
 
@@ -62,9 +65,16 @@ def main():
         print("Error: GEMINI_API_KEY must be set")
         return
 
-    # Fetch a recent article
-    print("\nFetching most recent article from Sanity...")
-    article = fetch_recent_article()
+    # Fetch article (by slug if provided, otherwise most recent)
+    slug = sys.argv[1] if len(sys.argv) > 1 else None
+    if slug:
+        # Strip URL prefix if a full URL was passed
+        if '/' in slug:
+            slug = slug.rstrip('/').split('/')[-1]
+        print(f"\nFetching article by slug: {slug}")
+    else:
+        print("\nFetching most recent article from Sanity...")
+    article = fetch_article(slug)
     if not article:
         return
 

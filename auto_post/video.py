@@ -1101,20 +1101,24 @@ Unnatural human
 → Must revise prompts before output.
 
 DIALOGUE SPLITTING RULE (CRITICAL)
-The full script MUST be split across the initial_prompt and exactly 2 extension_prompts. Each prompt MUST contain its exact dialogue portion in "quotes". If any prompt has no quoted dialogue, the video will have silent dead air — this is a failure. Split the script roughly evenly (~15-18 words per segment for a 50-word script).
+The full script MUST be split across the initial_prompt and exactly 2 extension_prompts. Each prompt MUST contain its exact dialogue portion in "quotes". If any prompt has no quoted dialogue, the video will have silent dead air — this is a failure.
+
+SPLIT AT SENTENCE BOUNDARIES: Always split the script between complete sentences — NEVER split mid-sentence. Each segment should contain 1-3 complete sentences (~15-18 words). The dialogue in each segment must be self-contained and start at a sentence beginning.
+
+EXTENSION TIMING: Each extension clip's first ~1 second overlaps with the previous clip and gets trimmed. To prevent dialogue from being cut off, each extension segment must begin with ~1 second of SILENT continuation (same pose, natural breathing, maybe a subtle gesture or expression shift) BEFORE the new dialogue starts. Do NOT start speaking new words until after the first second. The initial_prompt does NOT need this silent buffer — only extensions do.
 
 OUTPUT FORMAT
 Return ONLY valid JSON.
 
 {{
 "script": "Full 18–20 second spoken script (~45–55 words)",
-"appearance": "Describe Valentina's outfit and look for this video. IMPORTANT: Valentina has TWO natural biological legs — NEVER mention a prosthetic, artificial limb, or amputation. STYLE GUIDE: Athleisure meets professional casual. Tops must be form-fitting with low necklines (V-necks, scoop necks, ribbed tanks, wrap tops) — bust accentuated. Bottoms: fitted leggings, joggers, or tailored jeans. Colors: neutrals and earth tones (black, white, cream, beige, olive, tan, charcoal, rust, sage). Hair: always long black wavy hair, styling can vary (down, ponytail, half-up, loose braid). Accessories: minimal — small earrings, simple chain necklace, or a watch only. Footwear: sneakers, ankle boots, or sandals. NEVER: costumes, corporate suits, glasses, hats, scarves, prosthetic legs. Must differ from previous outfits listed above — vary the specific top style, bottom, colors, and hair styling while staying within the style guide.",
+"appearance": "Describe Valentina's outfit and look for this video. IMPORTANT: Valentina has TWO natural biological legs — NEVER mention a prosthetic, artificial limb, or amputation. STYLE GUIDE: Athleisure meets professional casual. Tops must be form-fitting with low necklines (V-necks, scoop necks, ribbed tanks, wrap tops) — bust accentuated. Bottoms: fitted leggings, joggers, or tailored jeans. Colors: neutrals and earth tones (black, white, cream, beige, olive, tan, charcoal, rust, sage). Hair: always long red-auburn wavy hair, styling can vary (down, ponytail, half-up, loose braid). Accessories: minimal — small earrings, simple chain necklace, or a watch only. Footwear: sneakers, ankle boots, or sandals. NEVER: costumes, corporate suits, glasses, hats, scarves, prosthetic legs. Must differ from previous outfits listed above — vary the specific top style, bottom, colors, and hair styling while staying within the style guide.",
 "actions": "Highly specific gestures tied to exact words being spoken.",
 "setting": "Visually interesting environment relevant to topic.",
 "initial_prompt": "Veo prompt for first 8 seconds. MUST include the first ~15-18 words of dialogue in quotes. Include full scene, lighting, camera framing, and gestures tied to specific dialogue words.",
 "extension_prompts": [
-"Seconds 8–14: MUST include the next ~15-18 words of dialogue in exact quotes. Dialogue starts IMMEDIATELY — no pause at the start. Continue from the EXACT frame where the previous segment ended (same position, lighting, background, framing). Specific gestures tied to specific dialogue words.",
-"Seconds 14–20: MUST include the final ~15-18 words of dialogue in exact quotes. Dialogue starts IMMEDIATELY — no pause at the start. Continue from the EXACT frame where the previous segment ended (same position, lighting, background, framing). Closing moment with emotional delivery and strong ending."
+"Seconds 8–14: First ~1 second is SILENT — same pose, natural breathing, subtle expression shift, NO new words spoken (this overlap gets trimmed). Then at ~1 second mark, begin the next sentence of dialogue in exact quotes (~15-18 words). Continue from the EXACT frame where the previous segment ended (same position, lighting, background, framing). Specific gestures tied to specific dialogue words.",
+"Seconds 14–20: First ~1 second is SILENT — same pose, natural breathing, subtle expression shift, NO new words spoken (this overlap gets trimmed). Then at ~1 second mark, begin the final sentence(s) of dialogue in exact quotes (~15-18 words). Continue from the EXACT frame where the previous segment ended (same position, lighting, background, framing). Closing moment with emotional delivery and strong ending."
 ]
 }}
 
@@ -1156,7 +1160,7 @@ For the "appearance" field — follow Valentina's STYLE GUIDE:
 • Tops: ALWAYS form-fitting with low necklines (V-necks, scoop necks, ribbed tanks, wrap tops) — bust accentuated
 • Bottoms: fitted leggings, joggers, tailored jeans, fitted trousers
 • Colors: neutrals and earth tones ONLY — black, white, cream, beige, olive, tan, charcoal, rust, sage, gray
-• Hair: ALWAYS long black wavy hair — vary styling only (down, ponytail, half-up, loose braid, swept to one side)
+• Hair: ALWAYS long red-auburn wavy hair — vary styling only (down, ponytail, half-up, loose braid, swept to one side)
 • Accessories: minimal jewelry ONLY — small earrings, simple chain/necklace, maybe a watch. NO glasses, hats, or scarves
 • Footwear: clean sneakers, ankle boots, or sandals depending on setting
 • NEVER: costumes, themed outfits, corporate suits, heavy formal wear
@@ -1231,14 +1235,16 @@ Be creative within the style constraints above.
         # Extension prefix adds face lock + continuity (since extensions can't use reference images)
         ext_prefix = (
             veo_rules
-            + "FACE LOCK: Same exact person as previous segment — Latina woman, defined cheekbones, "
-            "warm brown skin with freckles, brown eyes, long black wavy hair. "
+            + "FACE LOCK: Same exact person as previous segment — mixed heritage woman, defined cheekbones, "
+            "fair skin with freckles, green eyes, long red-auburn wavy hair. "
             "Face MUST match previous clip exactly. "
             + "SEAMLESS CONTINUITY (CRITICAL): This is a CONTINUATION of the previous clip, not a new scene. "
             "Start from the EXACT last frame of the previous segment — same body position, same hand placement, "
             "same head angle, same facial expression, same camera distance, same lighting, same background. "
             "The transition must be INVISIBLE — a viewer should not be able to tell where one clip ends and the next begins. "
-            "Dialogue continues IMMEDIATELY with zero pause or silence at the start. "
+            "OVERLAP BUFFER: The first ~1 second of this clip overlaps with the previous clip and will be trimmed. "
+            "During this first second, maintain the SAME pose and expression — NO new words spoken, just natural breathing "
+            "and subtle movement. New dialogue begins AFTER the first second. "
             "Do NOT reset pose, do NOT change camera angle, do NOT shift lighting. "
         )
         if appearance_desc:
