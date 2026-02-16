@@ -11,6 +11,7 @@ import base64
 import requests
 
 from google import genai
+from google.genai import types
 
 from .config import (GEMINI_API_KEY, VIDEOS_DIR, SPOKESPERSON_IMAGES_DIR,
                      USEAPI_TOKEN, USEAPI_GOOGLE_EMAIL, USEAPI_BASE_URL,
@@ -76,7 +77,7 @@ def _flow_poll_job(job_id):
 
 def _flow_upload_reference_images():
     """Upload spokesperson reference images to useapi.net as Flow assets.
-    Returns list of mediaGenerationId strings (max 3 for R2V)."""
+    Returns list of mediaGenerationId strings (up to 10 for nano-banana-pro)."""
     if not os.path.exists(SPOKESPERSON_IMAGES_DIR):
         print("    No assets directory found")
         return []
@@ -115,7 +116,7 @@ def _flow_upload_reference_images():
         except Exception as e:
             print(f"    Error uploading {filename}: {e}")
 
-        if len(ref_ids) >= 3:
+        if len(ref_ids) >= 10:
             break
 
     print(f"    {len(ref_ids)} reference image(s) uploaded")
@@ -152,7 +153,7 @@ def _flow_post_with_retry(url, payload, label="request"):
     Returns (mediaGenerationId, video_url) or (None, None)."""
     for attempt in range(FLOW_CAPTCHA_RETRIES):
         try:
-            resp = requests.post(url, headers=_flow_headers(), json=payload, timeout=60)
+            resp = requests.post(url, headers=_flow_headers(), json=payload, timeout=120)
         except requests.RequestException as e:
             print(f"    Flow {label} error: {e}")
             return None, None
@@ -189,39 +190,56 @@ def _flow_post_with_retry(url, payload, label="request"):
 def _extract_image_from_response(result):
     """Extract (mediaGenerationId, fifeUrl) from a useapi.net image response.
     Response structure: result.media[0].image.generatedImage.{mediaGenerationId, fifeUrl}"""
+    images = _extract_all_images_from_response(result)
+    if images:
+        return images[0]
+    return None, None
+
+
+def _extract_all_images_from_response(result):
+    """Extract ALL (mediaGenerationId, fifeUrl) pairs from a useapi.net image response.
+    Returns list of (img_id, img_url) tuples."""
     media = result.get('media', [])
     if not media:
         media = result.get('response', {}).get('media', [])
-    if media and isinstance(media, list):
-        # Nested under media[0].image.generatedImage
-        gen_img = media[0].get('image', {}).get('generatedImage', {})
+    if not media or not isinstance(media, list):
+        print(f"    No media in image response: {list(result.keys())}")
+        return []
+
+    images = []
+    for item in media:
+        # Nested under media[N].image.generatedImage
+        gen_img = item.get('image', {}).get('generatedImage', {})
         if gen_img:
             img_id = gen_img.get('mediaGenerationId')
             img_url = gen_img.get('fifeUrl')
             if img_id:
-                return img_id, img_url
+                images.append((img_id, img_url))
+                continue
         # Fallback: try flat structure
-        img_id = media[0].get('mediaGenerationId')
-        img_url = media[0].get('fifeUrl')
+        img_id = item.get('mediaGenerationId')
+        img_url = item.get('fifeUrl')
         if img_id:
-            return img_id, img_url
+            images.append((img_id, img_url))
+
+    if not images:
         print(f"    Image response missing mediaGenerationId: {list(media[0].keys())}")
-    else:
-        print(f"    No media in image response: {list(result.keys())}")
-    return None, None
+    return images
 
 
-def _flow_post_image_with_retry(url, payload, label="image"):
+def _flow_post_image_with_retry(url, payload, label="image", return_all=False):
     """POST to a Flow image endpoint with retries on 403 captcha failures.
-    Returns (mediaGenerationId, fifeUrl) or (None, None)."""
+    If return_all=True, returns list of (id, url) tuples. Otherwise returns single (id, url)."""
     for attempt in range(FLOW_CAPTCHA_RETRIES):
         try:
-            resp = requests.post(url, headers=_flow_headers(), json=payload, timeout=60)
+            resp = requests.post(url, headers=_flow_headers(), json=payload, timeout=120)
         except requests.RequestException as e:
             print(f"    Flow {label} error: {e}")
-            return None, None
+            return [] if return_all else (None, None)
 
         if resp.status_code == 200:
+            if return_all:
+                return _extract_all_images_from_response(resp.json())
             return _extract_image_from_response(resp.json())
 
         if resp.status_code == 201:
@@ -229,11 +247,13 @@ def _flow_post_image_with_retry(url, payload, label="image"):
             job_id = result.get('jobid') or result.get('jobId')
             if not job_id:
                 print(f"    No jobid in async image response: {list(result.keys())}")
-                return None, None
+                return [] if return_all else (None, None)
             print(f"    Image job queued: {job_id[:60]}...")
             completed = _flow_poll_job(job_id)
             if not completed:
-                return None, None
+                return [] if return_all else (None, None)
+            if return_all:
+                return _extract_all_images_from_response(completed)
             return _extract_image_from_response(completed)
 
         if resp.status_code == 403 and 'reCAPTCHA' in resp.text:
@@ -242,21 +262,60 @@ def _flow_post_image_with_retry(url, payload, label="image"):
                 time.sleep(5)
                 continue
             print(f"    Captcha failed after {FLOW_CAPTCHA_RETRIES} attempts")
-            return None, None
+            return [] if return_all else (None, None)
 
         print(f"    Flow {label} failed: {resp.status_code} {resp.text[:500]}")
-        return None, None
+        return [] if return_all else (None, None)
 
-    return None, None
+    return [] if return_all else (None, None)
 
 
-def _flow_generate_scene_image(appearance_brief, ref_ids):
-    """Generate a face-matched image of Valentina using nano-banana-pro.
-    Uses reference images for character consistency. Face matching is #1 priority.
-    Returns mediaGenerationId or None."""
+def _score_face_similarity(candidate_url, ref_image_path):
+    """Use Gemini vision to score how similar a candidate face is to the reference.
+    Returns a score 1-10, or 0 on failure."""
+    if not GEMINI_API_KEY or not candidate_url:
+        return 0
+    try:
+        # Download candidate image
+        resp = requests.get(candidate_url, timeout=30)
+        if resp.status_code != 200:
+            return 0
+        candidate_bytes = resp.content
+
+        # Load reference image
+        with open(ref_image_path, 'rb') as f:
+            ref_bytes = f.read()
+
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=[
+                "Rate 1-10 how similar the face in Image A is to Image B. "
+                "Consider: bone structure, eye shape/color, nose shape, lip shape, "
+                "skin tone, freckle pattern, cheekbone definition, jawline, hair. "
+                "10 = clearly the same person. 1 = completely different person. "
+                "Respond with ONLY a single number.",
+                types.Part.from_bytes(data=candidate_bytes, mime_type='image/png'),
+                "Image A (candidate) above. Image B (reference) below.",
+                types.Part.from_bytes(data=ref_bytes, mime_type='image/png'),
+            ]
+        )
+        score = int(response.text.strip().split()[0])
+        return max(1, min(10, score))
+    except Exception as e:
+        print(f"    Face scoring error: {e}")
+        return 0
+
+
+def _flow_generate_scene_image(appearance_brief, ref_ids, setting=""):
+    """Generate face-matched images of Valentina using nano-banana-pro.
+    Generates 4 candidates, scores each with Gemini vision, picks the best.
+    Returns (mediaGenerationId, fifeUrl) or (None, None)."""
     if not ref_ids:
         print("    No reference IDs for scene image generation")
-        return None
+        return None, None
+
+    setting_line = setting if setting else 'neutral, well-lit environment'
 
     prompt = f"""Generate a photorealistic image of the EXACT person shown in the reference images.
 
@@ -269,6 +328,7 @@ FRAMING: Medium close-up (chest and above), vertical 9:16 portrait
 EXPRESSION: Natural, confident, looking at camera, as if about to speak
 LIGHTING: Natural, well-lit face, phone camera quality
 BRIEF STYLING: {appearance_brief}
+SETTING/BACKGROUND: {setting_line}
 
 RULES:
 - Single person, face clearly visible and well-lit
@@ -280,7 +340,7 @@ RULES:
         'prompt': prompt,
         'model': 'nano-banana-pro',
         'aspectRatio': 'portrait',
-        'count': 1,
+        'count': 4,
     }
 
     if USEAPI_GOOGLE_EMAIL:
@@ -290,16 +350,44 @@ RULES:
     for i, ref_id in enumerate(ref_ids, start=1):
         payload[f'reference_{i}'] = ref_id
 
-    img_id, img_url = _flow_post_image_with_retry(
-        f'{USEAPI_BASE_URL}/images', payload, "scene-image"
+    candidates = _flow_post_image_with_retry(
+        f'{USEAPI_BASE_URL}/images', payload, "scene-image", return_all=True
     )
 
-    if img_id:
-        print(f"    Scene image generated: {img_id[:40]}...")
-    else:
+    if not candidates:
         print("    Scene image generation failed")
+        return None, None
 
-    return img_id, img_url
+    print(f"    Generated {len(candidates)} scene image candidate(s)")
+
+    # If only 1 candidate, use it directly
+    if len(candidates) == 1:
+        img_id, img_url = candidates[0]
+        print(f"    Scene image: {img_id[:40]}...")
+        return img_id, img_url
+
+    # Score each candidate against the front-facing reference
+    ref_front_path = os.path.join(SPOKESPERSON_IMAGES_DIR, 'ref_front.png')
+    if not os.path.exists(ref_front_path):
+        # Fallback to first image in assets
+        for f in sorted(os.listdir(SPOKESPERSON_IMAGES_DIR)):
+            if f.endswith(('.png', '.jpg', '.jpeg')):
+                ref_front_path = os.path.join(SPOKESPERSON_IMAGES_DIR, f)
+                break
+
+    best_id, best_url, best_score = None, None, 0
+    for idx, (img_id, img_url) in enumerate(candidates):
+        score = _score_face_similarity(img_url, ref_front_path)
+        print(f"    Candidate {idx + 1}: score={score}/10")
+        if score > best_score:
+            best_id, best_url, best_score = img_id, img_url, score
+
+    if best_id:
+        print(f"    Best scene image: score={best_score}/10, id={best_id[:40]}...")
+    else:
+        print("    All candidates scored 0 — using first candidate")
+        best_id, best_url = candidates[0]
+    return best_id, best_url
 
 
 def _flow_generate_clip(prompt, ref_ids=None, start_image_id=None):
@@ -418,8 +506,20 @@ def generate_tiktok_video_flow(article_data):
     scene_image_id = None
     if ref_ids:
         appearance_brief = video_prompt.get('appearance', 'casual athletic wear')
+        setting_brief = video_prompt.get('setting', '')
         print(f"  [Flow] Step 3: Generating face-matched scene image (nano-banana-pro, mode={VIDEO_SEED_MODE})...")
-        scene_image_id, _scene_url = _flow_generate_scene_image(appearance_brief, ref_ids)
+        scene_image_id, scene_url = _flow_generate_scene_image(appearance_brief, ref_ids, setting=setting_brief)
+        if scene_url:
+            # Save scene image for debugging/review
+            try:
+                scene_resp = requests.get(scene_url, timeout=30)
+                if scene_resp.status_code == 200:
+                    scene_path = os.path.join(VIDEOS_DIR, f'{slug}_scene.png')
+                    with open(scene_path, 'wb') as f:
+                        f.write(scene_resp.content)
+                    print(f"    Scene image saved: {scene_path}")
+            except Exception as e:
+                print(f"    Could not save scene image: {e}")
         if not scene_image_id:
             print("    Falling back to original reference images")
 
@@ -530,9 +630,8 @@ def generate_video_prompt(article_data):
         format_context = """
 
 VIDEO FORMAT: WALK AND TALK
-This video features Valentina walking while being filmed by a friend following alongside her.
+This video features Valentina walking while being filmed by a friend following alongside her. She is ACTIVELY SPEAKING throughout — her mouth moves with every word, her expressions are animated, and she gestures with both hands.
 
-IMPORTANT: See PROSTHETIC LEG PLACEMENT section. Prosthetic is on Valentina's LEFT leg (her anatomical left). Apply in all Veo prompts regardless of camera angle.
 IMPORTANT: Valentina must NOT be holding a phone or any device. Both hands are free for gesturing.
 
 Setting options (pick ONE):
@@ -546,12 +645,7 @@ Camera style:
 • Natural handheld sway from the friend walking — NOT stabilized, NOT smooth
 • Mix of angles: mostly front-facing, occasionally from the side or slightly behind as the friend repositions
 • Dynamic framing: sometimes closer (face/upper body), sometimes wider (showing full body including legs)
-• Vary framing throughout: tight shots for emphasis, wider shots to show her walking and prosthetic naturally
-
-Prosthetic visibility:
-• At least one or two wider shots naturally showing the prosthetic (on her left leg)
-• Present it naturally — not hidden, not spotlighted, just part of who she is
-• NEVER mention or reference the prosthetic in the dialogue
+• Vary framing throughout: tight shots for emphasis, wider shots to show her walking naturally
 
 Tone for walk-and-talk:
 • More casual and energetic than static format
@@ -560,24 +654,29 @@ Tone for walk-and-talk:
 • Slightly breathier/more dynamic delivery
 
 Movement description for Veo prompts:
-• Describe her walking naturally (steady pace, not rushing) with prosthetic visible on her left leg
+• Describe her walking naturally (steady pace, not rushing)
 • Friend filming walks alongside — camera has natural handheld sway from a walking person
 • Valentina's hands are FREE — she uses both hands for natural gestures while talking
 • Background changes/moves as she walks — include real-world activity (other people, traffic, ambient life)
-• Occasional wider angles show the prosthetic on Valentina's left leg, natural biological right leg
-• Include at least 1-2 prompts with wider framing: "Camera pulls back showing Valentina walking, below-knee prosthetic on her left leg, natural biological right leg"
 • Environment should feel busy and real, not an empty path or sterile location"""
     elif video_format == 'static':
         format_context = """
 
 VIDEO FORMAT: STATIC
-This video features Valentina in a fixed position (seated or standing), filmed by a friend or with the camera resting on a surface nearby.
+This video features Valentina in a fixed position (seated or standing), filmed by a friend or with the camera resting on a surface nearby. She is ACTIVELY SPEAKING throughout — her mouth moves, her expressions change, and she gestures naturally.
 
 Camera style:
 • Camera resting on a surface or held by a friend — slight micro-drift, NOT tripod-locked
 • Occasional subtle wobble or minor shift (surface vibrating, friend's hand shifting)
 • Consistent general framing but with natural imperfection
-• She maintains same general position
+• She maintains same general position but is animated and expressive
+
+Performance (CRITICAL — she must be visibly alive and moving):
+• Mouth visibly moves with every word of dialogue — lips, jaw, tongue all animate naturally
+• Facial expressions shift constantly: eyebrow raises, smirks, eye widening, knowing looks
+• Hand gestures throughout: pointing, counting on fingers, open-palm emphasis, casual waves
+• Natural body micro-movements: weight shifts, slight leans, head tilts, shoulder shrugs
+• She is TALKING TO CAMERA like a real person — NOT a still photo with audio overlay
 
 Setting:
 • Casual real environment: couch, kitchen counter, desk, bed, car seat — NOT a studio or set
@@ -592,9 +691,7 @@ Tone for static:
         format_context = """
 
 VIDEO FORMAT: LOCATION TOUR
-This video features Valentina at a TOPIC-RELEVANT location, filmed by a friend (third-person camera). She walks through the space, interacts with the environment, and explains the topic while the setting reinforces the content.
-
-IMPORTANT: See PROSTHETIC LEG PLACEMENT section. Prosthetic is on Valentina's LEFT leg (her anatomical left), regardless of camera angle. Apply in wider shots. NEVER mention in dialogue.
+This video features Valentina at a TOPIC-RELEVANT location, filmed by a friend (third-person camera). She walks through the space, interacts with the environment, and explains the topic while the setting reinforces the content. She is ACTIVELY SPEAKING throughout — her mouth moves with every word, her expressions are animated, and she gestures naturally.
 
 Camera style:
 • Third-person filming — a friend is following and filming her
@@ -627,7 +724,7 @@ Tone for location-tour:
 • Still maintains her personality — witty, confident, slightly playful
 • Like a friend giving you a tour of somewhere relevant and explaining what it means for your situation"""
 
-    prompt = f"""Given this article, create a high-retention 22–26 second vertical short-form video optimized for TikTok and Instagram Reels. Every video must maximize watch time, replays, and comments.
+    prompt = f"""Given this article, create a high-retention 18–20 second vertical short-form video optimized for TikTok and Instagram Reels. Every video must maximize watch time, replays, and comments.
 
 ARTICLE TITLE: {title}
 ARTICLE SUMMARY: {excerpt}
@@ -639,14 +736,6 @@ KEYWORDS: {keywords}
 
 PHYSICAL IDENTITY RULE (ABSOLUTE — DO NOT VIOLATE)
 Valentina's physical features MUST be consistent across every segment and every video.
-
-PROSTHETIC LEG PLACEMENT (ABSOLUTE):
-• Valentina has a below-knee prosthetic on her LEFT leg (her anatomical left)
-• Her RIGHT leg is always a natural biological leg — no prosthetic, no metal, no artificial limb on her right leg
-• In Veo prompts, use anatomical/character-relative language: "Valentina's left leg has a below-knee prosthetic" — this is camera-angle-agnostic
-• NEVER use screen-relative language like "right side of frame" for prosthetic placement — camera angles change, anatomy does not
-• Every Veo prompt must include BOTH: positive ("Valentina's left leg has a below-knee prosthetic") AND negative ("her right leg is natural, no prosthetic on her right leg")
-• This applies regardless of camera angle — whether she faces toward, away from, or sideways to the camera, her left leg is always the prosthetic
 
 IDENTIFYING FEATURES CONSISTENCY:
 • All tattoos must remain in the same placement, size, and design across every segment
@@ -768,10 +857,10 @@ For the explanation sections (not the hook):
 
 PERFORMANCE STRUCTURE
 0–3 sec → Hook (scroll-stopping opener)
-3–8 sec → Problem or myth
-8–16 sec → Insight
-16–22 sec → Why it matters
-22–26 sec → Takeaway or closing thought
+3–7 sec → Problem or myth
+7–13 sec → Insight
+13–18 sec → Why it matters
+18–20 sec → Takeaway or closing thought
 
 HUMOR + SEXUAL INNUENDO RULE (REQUIRED)
 
@@ -836,7 +925,7 @@ Lighting must feel natural and ambient — window light, overhead room light, or
 
 Framing:
 • Mix medium shots (waist up) and full body shots throughout the video — don't stay locked on one framing
-• Full body shots for: establishing the location, showing environment interaction, walking moments, showing prosthetic naturally
+• Full body shots for: establishing the location, showing environment interaction, walking moments
 • Closer shots for: emphasis moments, emotional delivery, hook lines, key insights
 • Show enough of the environment to establish context — don't crop out the setting
 
@@ -904,7 +993,7 @@ Environment as content:
 • The viewer should be able to guess the topic partly from the setting alone
 
 Positioning variety:
-• Vary naturally: sometimes standing, sometimes sitting, sometimes in wheelchair
+• Vary naturally: sometimes standing, sometimes sitting
 • Choose what fits the setting and topic best
 • Positioning must feel natural and intentional (not random)
 
@@ -934,7 +1023,7 @@ This is filmed on a smartphone, NOT a cinema camera. Always include:
 • NEVER describe cinematic lenses (35mm, 50mm, anamorphic) — this is a phone
 
 LENGTH RULE
-Script must sound natural when spoken in 22–26 seconds.
+Script must sound natural when spoken in 18–20 seconds.
 
 FINAL QA + SPELLCHECK + VIDEO QUALITY VERIFICATION (MANDATORY)
 Before returning final JSON output, perform ALL checks below.
@@ -968,7 +1057,6 @@ Human Realism
 • Skin texture realistic (not plastic or melted)
 
 Physical Identity Consistency (CRITICAL)
-• Prosthetic is on Valentina's LEFT leg (her anatomical left) — if it appears on her right leg → FIX IMMEDIATELY
 • All tattoos consistent in placement, size, and design across every segment
 • Freckles, sunspots, moles consistent — never appearing/disappearing between segments
 • All identifying features match reference images
@@ -1013,20 +1101,20 @@ Unnatural human
 → Must revise prompts before output.
 
 DIALOGUE SPLITTING RULE (CRITICAL)
-The full script MUST be split across the initial_prompt and exactly 2 extension_prompts. Each prompt MUST contain its exact dialogue portion in "quotes". If any prompt has no quoted dialogue, the video will have silent dead air — this is a failure. Split the script roughly evenly (~20 words per segment for a 60-word script).
+The full script MUST be split across the initial_prompt and exactly 2 extension_prompts. Each prompt MUST contain its exact dialogue portion in "quotes". If any prompt has no quoted dialogue, the video will have silent dead air — this is a failure. Split the script roughly evenly (~15-18 words per segment for a 50-word script).
 
 OUTPUT FORMAT
 Return ONLY valid JSON.
 
 {{
-"script": "Full 22–26 second spoken script (~55–70 words)",
-"appearance": "Describe Valentina's outfit and look for this video. STYLE GUIDE: Athleisure meets professional casual. Tops must be form-fitting with low necklines (V-necks, scoop necks, ribbed tanks, wrap tops) — bust accentuated. Bottoms: fitted leggings, joggers, or tailored jeans. Colors: neutrals and earth tones (black, white, cream, beige, olive, tan, charcoal, rust, sage). Hair: always long black wavy hair, styling can vary (down, ponytail, half-up, loose braid). Accessories: minimal — small earrings, simple chain necklace, or a watch only. Footwear: sneakers, ankle boots, or sandals. NEVER: costumes, corporate suits, glasses, hats, scarves. Must differ from previous outfits listed above — vary the specific top style, bottom, colors, and hair styling while staying within the style guide.",
+"script": "Full 18–20 second spoken script (~45–55 words)",
+"appearance": "Describe Valentina's outfit and look for this video. IMPORTANT: Valentina has TWO natural biological legs — NEVER mention a prosthetic, artificial limb, or amputation. STYLE GUIDE: Athleisure meets professional casual. Tops must be form-fitting with low necklines (V-necks, scoop necks, ribbed tanks, wrap tops) — bust accentuated. Bottoms: fitted leggings, joggers, or tailored jeans. Colors: neutrals and earth tones (black, white, cream, beige, olive, tan, charcoal, rust, sage). Hair: always long black wavy hair, styling can vary (down, ponytail, half-up, loose braid). Accessories: minimal — small earrings, simple chain necklace, or a watch only. Footwear: sneakers, ankle boots, or sandals. NEVER: costumes, corporate suits, glasses, hats, scarves, prosthetic legs. Must differ from previous outfits listed above — vary the specific top style, bottom, colors, and hair styling while staying within the style guide.",
 "actions": "Highly specific gestures tied to exact words being spoken.",
 "setting": "Visually interesting environment relevant to topic.",
-"initial_prompt": "Veo prompt for first 8 seconds. MUST include the first ~20 words of dialogue in quotes. Include full scene, lighting, camera framing, and gestures tied to specific dialogue words.",
+"initial_prompt": "Veo prompt for first 8 seconds. MUST include the first ~15-18 words of dialogue in quotes. Include full scene, lighting, camera framing, and gestures tied to specific dialogue words.",
 "extension_prompts": [
-"Seconds 8–16: MUST include the next ~20 words of dialogue in exact quotes. Dialogue starts IMMEDIATELY — no pause at the start. Continue from the EXACT frame where the previous segment ended (same position, lighting, background, framing). Specific gestures tied to specific dialogue words.",
-"Seconds 16–24: MUST include the final ~20 words of dialogue in exact quotes. Dialogue starts IMMEDIATELY — no pause at the start. Continue from the EXACT frame where the previous segment ended (same position, lighting, background, framing). Closing moment with emotional delivery and strong ending."
+"Seconds 8–14: MUST include the next ~15-18 words of dialogue in exact quotes. Dialogue starts IMMEDIATELY — no pause at the start. Continue from the EXACT frame where the previous segment ended (same position, lighting, background, framing). Specific gestures tied to specific dialogue words.",
+"Seconds 14–20: MUST include the final ~15-18 words of dialogue in exact quotes. Dialogue starts IMMEDIATELY — no pause at the start. Continue from the EXACT frame where the previous segment ended (same position, lighting, background, framing). Closing moment with emotional delivery and strong ending."
 ]
 }}
 
@@ -1115,12 +1203,28 @@ Be creative within the style constraints above.
                 segment_name = "initial" if idx == 0 else f"extension {idx}"
                 print(f"  Warning: {segment_name} prompt has no quoted dialogue — video may have silent sections")
 
+        # Post-process: strip any prosthetic/amputation mentions Gemini may have added
+        prosthetic_re = re.compile(
+            r'[^.]*(?:prosthetic|artificial limb|amputation|amputee|carbon[- ]fiber leg|metal leg|below[- ]knee)[^.]*\.\s*',
+            re.IGNORECASE
+        )
+        for field in ('appearance', 'initial_prompt', 'actions', 'setting'):
+            if field in video_prompt and isinstance(video_prompt[field], str):
+                video_prompt[field] = prosthetic_re.sub('', video_prompt[field])
+        if 'extension_prompts' in video_prompt:
+            video_prompt['extension_prompts'] = [
+                prosthetic_re.sub('', p) for p in video_prompt['extension_prompts']
+            ]
+
         # Post-process: inject critical rules into every Veo prompt
         appearance_desc = video_prompt.get('appearance', '')
 
         # Condensed rules (no redundant suffix — single injection)
         veo_rules = (
-            "RULES: Valentina's LEFT leg has below-knee prosthetic, RIGHT leg is natural. "
+            "RULES: Valentina MUST be actively speaking — mouth visibly moving, facial expressions changing, "
+            "natural hand gestures. She is a real person talking to camera, NOT a still image. "
+            "Valentina has TWO natural biological legs — NO prosthetic leg, NO artificial limb, NO metal leg, NO amputation. "
+            "Both legs are completely natural and human. "
             "ZERO text/subtitles/captions/UI/phones in frame. Raw phone footage look. "
         )
 
@@ -1130,7 +1234,12 @@ Be creative within the style constraints above.
             + "FACE LOCK: Same exact person as previous segment — Latina woman, defined cheekbones, "
             "warm brown skin with freckles, brown eyes, long black wavy hair. "
             "Face MUST match previous clip exactly. "
-            + "CONTINUITY: Continue from EXACT end frame — same position, lighting, background, angle. No visible cut. "
+            + "SEAMLESS CONTINUITY (CRITICAL): This is a CONTINUATION of the previous clip, not a new scene. "
+            "Start from the EXACT last frame of the previous segment — same body position, same hand placement, "
+            "same head angle, same facial expression, same camera distance, same lighting, same background. "
+            "The transition must be INVISIBLE — a viewer should not be able to tell where one clip ends and the next begins. "
+            "Dialogue continues IMMEDIATELY with zero pause or silence at the start. "
+            "Do NOT reset pose, do NOT change camera angle, do NOT shift lighting. "
         )
         if appearance_desc:
             ext_prefix += f"APPEARANCE: {appearance_desc} "

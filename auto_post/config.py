@@ -34,7 +34,7 @@ USEAPI_BASE_URL = 'https://api.useapi.net/v1/google-flow'
 
 # --- VIDEO GENERATION CONFIGURATION ---
 ENABLE_VIDEO_GENERATION = os.environ.get('ENABLE_VIDEO_GENERATION', 'true').lower() == 'true'
-VIDEO_SEED_MODE = os.environ.get('VIDEO_SEED_MODE', 'i2v')  # 'i2v' (startImage) or 'r2v' (extra reference)
+VIDEO_SEED_MODE = os.environ.get('VIDEO_SEED_MODE', 'r2v')  # 'r2v' (reference only, natural animation) or 'i2v' (startImage, can cause mouth artifacts)
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VIDEOS_DIR = os.path.join(_BASE_DIR, 'videos')
 SPOKESPERSON_IMAGES_DIR = os.path.join(_BASE_DIR, 'assets')

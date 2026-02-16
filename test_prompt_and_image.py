@@ -110,7 +110,8 @@ def main():
     print(f"  Uploaded {len(ref_ids)} reference image(s)")
 
     appearance_brief = video_prompt.get('appearance', 'casual athletic wear')
-    scene_id, scene_url = _flow_generate_scene_image(appearance_brief, ref_ids)
+    setting_brief = video_prompt.get('setting', '')
+    scene_id, scene_url = _flow_generate_scene_image(appearance_brief, ref_ids, setting=setting_brief)
 
     if not scene_id:
         print("FAILED: Could not generate scene image")

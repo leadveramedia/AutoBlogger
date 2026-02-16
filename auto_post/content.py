@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 import requests as req
 from google import genai
+from google.genai import types
 
 from .config import GEMINI_API_KEY
 
@@ -222,11 +223,7 @@ def detect_text_in_image(image_data):
         return False
 
     try:
-        import base64
         client = genai.Client(api_key=GEMINI_API_KEY)
-
-        # Encode image to base64
-        image_b64 = base64.b64encode(image_data).decode('utf-8')
 
         prompt = """Analyze this image carefully and determine if it contains ANY visible text, words, letters, numbers, signs, labels, or writing of any kind.
 
@@ -245,7 +242,7 @@ Respond with ONLY "YES" if you detect ANY text/letters/numbers/writing, or "NO" 
             model='gemini-3-flash-preview',
             contents=[
                 prompt,
-                {'mime_type': 'image/jpeg', 'data': image_b64}
+                types.Part.from_bytes(data=image_data, mime_type='image/png'),
             ]
         )
 
