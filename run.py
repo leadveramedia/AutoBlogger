@@ -113,6 +113,7 @@ def main():
     # Step 4 & 5: Generate and Post Each Article
     success_count = 0
     fail_count = 0
+    video_article = None  # First successful news article gets the video
 
     for i, selected_article in enumerate(selected_articles, 1):
         print(f"\n{'='*60}")
@@ -144,6 +145,8 @@ def main():
 
         if success:
             success_count += 1
+            if video_article is None:
+                video_article = generated_article
             # Track this topic to avoid duplicates in future runs
             topic_summary = selected_article.get('topic_summary', selected_article.get('title', '')[:100])
             if topic_summary:
@@ -155,6 +158,20 @@ def main():
         # Small delay between posts
         if i < len(selected_articles):
             time.sleep(2)
+
+    # Step 5.5: Generate TikTok video for first successful news article
+    if ENABLE_VIDEO_GENERATION and video_article:
+        print(f"\n{'='*60}")
+        print(f"  Generating TikTok Video for: {video_article.get('title', 'N/A')[:50]}")
+        print(f"{'='*60}")
+        try:
+            video_path = generate_tiktok_video(video_article)
+            if video_path:
+                print(f"  TikTok video saved: {video_path}")
+            else:
+                print(f"  Video generation unsuccessful (article still published)")
+        except Exception as e:
+            print(f"  Video generation failed: {e} (article still published)")
 
     # Step 6: Generate article from pre-defined title list
     print(f"\n{'='*60}")
@@ -187,17 +204,6 @@ def main():
                 # Remove the used title and save
                 titles.pop(0)
                 save_title_list(titles)
-
-                # Generate TikTok video (non-blocking - failure doesn't affect article)
-                if ENABLE_VIDEO_GENERATION:
-                    try:
-                        video_path = generate_tiktok_video(title_article)
-                        if video_path:
-                            print(f"  TikTok video saved: {video_path}")
-                        else:
-                            print(f"  Video generation unsuccessful (article still published)")
-                    except Exception as e:
-                        print(f"  Video generation failed: {e} (article still published)")
             else:
                 fail_count += 1
         else:
