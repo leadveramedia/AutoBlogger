@@ -1624,110 +1624,128 @@ The reference images are for facial features only — NOT for outfit/hair consis
 Be creative within the style constraints above.
 """
 
-    try:
-        response = client.models.generate_content(
-            model='gemini-3-flash-preview',
-            contents=prompt,
-            config={
-                'response_mime_type': 'application/json'
-            }
-        )
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = client.models.generate_content(
+                model='gemini-3-flash-preview',
+                contents=prompt,
+                config={
+                    'response_mime_type': 'application/json'
+                }
+            )
 
-        json_string = response.text.strip()
+            json_string = response.text.strip()
 
-        if json_string.startswith('```'):
-            json_string = re.sub(r'^```(?:json)?\s*\n?', '', json_string)
-            json_string = re.sub(r'\n?\s*```\s*$', '', json_string)
+            if json_string.startswith('```'):
+                json_string = re.sub(r'^```(?:json)?\s*\n?', '', json_string)
+                json_string = re.sub(r'\n?\s*```\s*$', '', json_string)
 
-        json_string = sanitize_json_control_chars(json_string)
-        video_prompt = json.loads(json_string)
+            json_string = sanitize_json_control_chars(json_string)
+            video_prompt = json.loads(json_string)
 
-        # Validate required fields
-        required = ['initial_prompt', 'extension_prompts']
-        for field in required:
-            if field not in video_prompt:
-                print(f"  Error: Video prompt missing required field: {field}")
-                return None
+            # Validate required fields
+            required = ['initial_prompt', 'extension_prompts']
+            missing_fields = [field for field in required if field not in video_prompt]
+            if missing_fields:
+                if attempt < max_retries:
+                    print(f"  Retry {attempt}/{max_retries-1}: Missing field(s): {', '.join(missing_fields)}")
+                    continue
+                else:
+                    print(f"  Error: Video prompt missing required field(s) after {max_retries} attempts: {', '.join(missing_fields)}")
+                    return None
 
-        if not isinstance(video_prompt.get('extension_prompts'), list):
-            print(f"  Error: extension_prompts is not a list")
-            return None
+            if not isinstance(video_prompt.get('extension_prompts'), list):
+                if attempt < max_retries:
+                    print(f"  Retry {attempt}/{max_retries-1}: extension_prompts is not a list")
+                    continue
+                else:
+                    print(f"  Error: extension_prompts is not a list after {max_retries} attempts")
+                    return None
 
-        # Validate dialogue presence in all prompt segments
-        dialogue_re = re.compile(r'"[^"]{10,}"')
-        all_prompts = [video_prompt.get('initial_prompt', '')] + video_prompt.get('extension_prompts', [])
-        for idx, p in enumerate(all_prompts):
-            if not dialogue_re.search(p):
-                segment_name = "initial" if idx == 0 else f"extension {idx}"
-                print(f"  Warning: {segment_name} prompt has no quoted dialogue — video may have silent sections")
+            # Validate dialogue presence in all prompt segments
+            dialogue_re = re.compile(r'"[^"]{10,}"')
+            all_prompts = [video_prompt.get('initial_prompt', '')] + video_prompt.get('extension_prompts', [])
+            for idx, p in enumerate(all_prompts):
+                if not dialogue_re.search(p):
+                    segment_name = "initial" if idx == 0 else f"extension {idx}"
+                    print(f"  Warning: {segment_name} prompt has no quoted dialogue — video may have silent sections")
 
-        # Post-process: strip any prosthetic/amputation mentions Gemini may have added
-        prosthetic_re = re.compile(
-            r'[^.]*(?:prosthetic|artificial limb|amputation|amputee|carbon[- ]fiber leg|metal leg|below[- ]knee)[^.]*\.\s*',
-            re.IGNORECASE
-        )
-        for field in ('appearance', 'initial_prompt', 'actions', 'setting'):
-            if field in video_prompt and isinstance(video_prompt[field], str):
-                video_prompt[field] = prosthetic_re.sub('', video_prompt[field])
-        if 'extension_prompts' in video_prompt:
-            video_prompt['extension_prompts'] = [
-                prosthetic_re.sub('', p) for p in video_prompt['extension_prompts']
-            ]
+            # Post-process: strip any prosthetic/amputation mentions Gemini may have added
+            prosthetic_re = re.compile(
+                r'[^.]*(?:prosthetic|artificial limb|amputation|amputee|carbon[- ]fiber leg|metal leg|below[- ]knee)[^.]*\.\s*',
+                re.IGNORECASE
+            )
+            for field in ('appearance', 'initial_prompt', 'actions', 'setting'):
+                if field in video_prompt and isinstance(video_prompt[field], str):
+                    video_prompt[field] = prosthetic_re.sub('', video_prompt[field])
+            if 'extension_prompts' in video_prompt:
+                video_prompt['extension_prompts'] = [
+                    prosthetic_re.sub('', p) for p in video_prompt['extension_prompts']
+                ]
 
-        # Post-process: inject critical rules into every Veo prompt
-        appearance_desc = video_prompt.get('appearance', '')
+            # Post-process: inject critical rules into every Veo prompt
+            appearance_desc = video_prompt.get('appearance', '')
 
-        # Condensed rules (no redundant suffix — single injection)
-        veo_rules = (
-            "RULES: Valentina MUST be actively speaking — mouth visibly moving, facial expressions changing, "
-            "natural hand gestures. She is a real person talking to camera, NOT a still image. Lip movements MUST precisely match spoken audio — every word's mouth shape syncs with the sound. "
-            "FACE ON SCREEN AT ALL TIMES (CRITICAL): Valentina's face MUST be clearly visible in EVERY frame of the video. "
-            "She MUST face the camera directly — NEVER turn her head away, NEVER look to the side for more than a split second, "
-            "NEVER turn her back, NEVER walk away from camera. Her face fills the upper third of the frame at all times. "
-            "The camera MUST stay in front of her — no profile shots, no behind shots, no over-shoulder angles. "
-            "Valentina has TWO natural biological legs — NO prosthetic leg, NO artificial limb, NO metal leg, NO amputation. "
-            "Both legs are completely natural and human. "
-            "ZERO text/subtitles/captions/UI/phones/hands/cameras in frame. Natural handheld camera feel. "
-        )
+            # Condensed rules (no redundant suffix — single injection)
+            veo_rules = (
+                "RULES: Valentina MUST be actively speaking — mouth visibly moving, facial expressions changing, "
+                "natural hand gestures. She is a real person talking to camera, NOT a still image. Lip movements MUST precisely match spoken audio — every word's mouth shape syncs with the sound. "
+                "FACE ON SCREEN AT ALL TIMES (CRITICAL): Valentina's face MUST be clearly visible in EVERY frame of the video. "
+                "She MUST face the camera directly — NEVER turn her head away, NEVER look to the side for more than a split second, "
+                "NEVER turn her back, NEVER walk away from camera. Her face fills the upper third of the frame at all times. "
+                "The camera MUST stay in front of her — no profile shots, no behind shots, no over-shoulder angles. "
+                "Valentina has TWO natural biological legs — NO prosthetic leg, NO artificial limb, NO metal leg, NO amputation. "
+                "Both legs are completely natural and human. "
+                "ZERO text/subtitles/captions/UI/phones/hands/cameras in frame. Natural handheld camera feel. "
+            )
 
-        # Extension prefix adds face lock + continuity (since extensions can't use reference images)
-        ext_prefix = (
-            veo_rules
-            + "FACE LOCK: Same exact person as previous segment — mixed heritage woman, defined cheekbones, "
-            "fair skin with freckles, green eyes, long red-auburn wavy hair. "
-            "Face MUST match previous clip exactly. "
-            + "SEAMLESS CONTINUITY (CRITICAL): This is a CONTINUATION of the previous clip, not a new scene. "
-            "Start from the EXACT last frame of the previous segment — same body position, same hand placement, "
-            "same head angle, same facial expression, same camera distance, same lighting, same background. "
-            "The transition must be INVISIBLE — a viewer should not be able to tell where one clip ends and the next begins. "
-            "Valentina MUST face the camera at ALL times — NEVER turn her back to camera, NEVER look away for more than a glance. "
-            "NO new objects, poles, props, or structural elements may appear that were not visible in the previous clip. "
-            "The voice MUST remain the SAME — same pitch, same tone, same speaking style as previous segment. "
-            "OVERLAP BUFFER: The first ~1.5 seconds of this clip overlap with the previous clip (first second is trimmed, remaining 0.5s provides margin). "
-            "During these first 1.5 seconds, maintain the SAME pose and expression — NO new words spoken, just natural breathing "
-            "and subtle movement. New dialogue begins AFTER 1.5 seconds. "
-            "Do NOT reset pose, do NOT change camera angle, do NOT shift lighting. Do NOT introduce new objects or scenery. "
-        )
-        if appearance_desc:
-            ext_prefix += f"APPEARANCE: {appearance_desc} "
-
-        if video_prompt.get('initial_prompt'):
-            initial_prefix = veo_rules
+            # Extension prefix adds face lock + continuity (since extensions can't use reference images)
+            ext_prefix = (
+                veo_rules
+                + "FACE LOCK: Same exact person as previous segment — mixed heritage woman, defined cheekbones, "
+                "fair skin with freckles, green eyes, long red-auburn wavy hair. "
+                "Face MUST match previous clip exactly. "
+                + "SEAMLESS CONTINUITY (CRITICAL): This is a CONTINUATION of the previous clip, not a new scene. "
+                "Start from the EXACT last frame of the previous segment — same body position, same hand placement, "
+                "same head angle, same facial expression, same camera distance, same lighting, same background. "
+                "The transition must be INVISIBLE — a viewer should not be able to tell where one clip ends and the next begins. "
+                "Valentina MUST face the camera at ALL times — NEVER turn her back to camera, NEVER look away for more than a glance. "
+                "NO new objects, poles, props, or structural elements may appear that were not visible in the previous clip. "
+                "The voice MUST remain the SAME — same pitch, same tone, same speaking style as previous segment. "
+                "OVERLAP BUFFER: The first ~1.5 seconds of this clip overlap with the previous clip (first second is trimmed, remaining 0.5s provides margin). "
+                "During these first 1.5 seconds, maintain the SAME pose and expression — NO new words spoken, just natural breathing "
+                "and subtle movement. New dialogue begins AFTER 1.5 seconds. "
+                "Do NOT reset pose, do NOT change camera angle, do NOT shift lighting. Do NOT introduce new objects or scenery. "
+            )
             if appearance_desc:
-                initial_prefix += f"APPEARANCE: {appearance_desc} "
-            video_prompt['initial_prompt'] = initial_prefix + video_prompt['initial_prompt']
-        for idx, ext in enumerate(video_prompt.get('extension_prompts', [])):
-            video_prompt['extension_prompts'][idx] = ext_prefix + ext
+                ext_prefix += f"APPEARANCE: {appearance_desc} "
 
-        print(f"  Video script generated ({len(video_prompt.get('script', ''))} chars)")
-        return video_prompt
+            if video_prompt.get('initial_prompt'):
+                initial_prefix = veo_rules
+                if appearance_desc:
+                    initial_prefix += f"APPEARANCE: {appearance_desc} "
+                video_prompt['initial_prompt'] = initial_prefix + video_prompt['initial_prompt']
+            for idx, ext in enumerate(video_prompt.get('extension_prompts', [])):
+                video_prompt['extension_prompts'][idx] = ext_prefix + ext
 
-    except json.JSONDecodeError as e:
-        print(f"  Error parsing video prompt JSON: {e}")
-        return None
-    except Exception as e:
-        print(f"  Error generating video prompt: {e}")
-        return None
+            print(f"  Video script generated ({len(video_prompt.get('script', ''))} chars)")
+            return video_prompt
+
+        except json.JSONDecodeError as e:
+            if attempt < max_retries:
+                print(f"  Retry {attempt}/{max_retries-1}: JSON parsing error: {e}")
+                continue
+            else:
+                print(f"  Error parsing video prompt JSON after {max_retries} attempts: {e}")
+                return None
+        except Exception as e:
+            if attempt < max_retries:
+                print(f"  Retry {attempt}/{max_retries-1}: {e}")
+                continue
+            else:
+                print(f"  Error generating video prompt after {max_retries} attempts: {e}")
+                return None
 
 
 # ============================================================
