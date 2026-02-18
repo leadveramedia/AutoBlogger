@@ -326,13 +326,13 @@ PRIORITY #1 — FACE MATCHING (above all else):
 
 FRAMING: Medium close-up (chest and above), vertical 9:16 portrait
 EXPRESSION: Natural, confident, looking at camera, as if about to speak
-LIGHTING: Natural, well-lit face, phone camera quality
+LIGHTING: Natural, well-lit face, natural casual lighting
 BRIEF STYLING: {appearance_brief}
 SETTING/BACKGROUND: {setting_line}
 
 RULES:
 - Single person, face clearly visible and well-lit
-- Photorealistic — shot on a phone camera
+- Photorealistic — casual, natural style
 - NO text, NO signs, NO watermarks
 - NO sunglasses or anything covering the face"""
 
@@ -481,6 +481,355 @@ def _flow_concatenate(media_ids):
     return None
 
 
+def _local_concatenate_with_crossfade(clip_urls, crossfade_duration=0.3, trim_extensions=1.0):
+    """Download clips and concatenate locally with ffmpeg crossfade.
+    Returns video bytes or None."""
+    import subprocess
+    import tempfile
+
+    ffmpeg = _get_ffmpeg()
+    if not ffmpeg or len(clip_urls) < 2:
+        return None
+
+    tmp_dir = tempfile.mkdtemp(prefix='autoblogger_')
+    clip_paths = []
+
+    try:
+        # Download each clip
+        for i, url in enumerate(clip_urls):
+            clip_path = os.path.join(tmp_dir, f'clip_{i}.mp4')
+            try:
+                dl = requests.get(url, timeout=120)
+                dl.raise_for_status()
+                with open(clip_path, 'wb') as f:
+                    f.write(dl.content)
+                clip_paths.append(clip_path)
+                print(f"    Downloaded clip {i + 1}: {len(dl.content) / 1024 / 1024:.1f} MB")
+            except Exception as e:
+                print(f"    Failed to download clip {i + 1}: {e}")
+                return None
+
+        # Trim extensions (skip first N seconds) and re-encode to ensure consistent format
+        trimmed_paths = []
+        for i, path in enumerate(clip_paths):
+            if i == 0:
+                trimmed_paths.append(path)
+            else:
+                trimmed = os.path.join(tmp_dir, f'trimmed_{i}.mp4')
+                cmd = [
+                    ffmpeg, '-i', path,
+                    '-ss', str(trim_extensions),
+                    '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
+                    '-c:a', 'aac', '-b:a', '128k',
+                    '-y', trimmed
+                ]
+                result = subprocess.run(cmd, capture_output=True, timeout=60)
+                if result.returncode != 0:
+                    print(f"    Trim failed for clip {i + 1}: {result.stderr.decode()[:150]}")
+                    return None
+                trimmed_paths.append(trimmed)
+
+        # Build xfade filter chain for video + acrossfade for audio
+        output_path = os.path.join(tmp_dir, 'final.mp4')
+
+        if len(trimmed_paths) == 2:
+            # Simple 2-clip crossfade
+            # Get duration of first clip
+            dur1 = _get_video_duration(ffmpeg, trimmed_paths[0])
+            offset = dur1 - crossfade_duration
+
+            cmd = [
+                ffmpeg,
+                '-i', trimmed_paths[0],
+                '-i', trimmed_paths[1],
+                '-filter_complex',
+                f"[0:v][1:v]xfade=transition=fade:duration={crossfade_duration}:offset={offset}[v];"
+                f"[0:a][1:a]acrossfade=d={crossfade_duration}[a]",
+                '-map', '[v]', '-map', '[a]',
+                '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
+                '-c:a', 'aac', '-b:a', '128k',
+                '-y', output_path
+            ]
+        elif len(trimmed_paths) == 3:
+            # 3-clip crossfade chain
+            dur1 = _get_video_duration(ffmpeg, trimmed_paths[0])
+            dur2 = _get_video_duration(ffmpeg, trimmed_paths[1])
+            offset1 = dur1 - crossfade_duration
+            offset2 = offset1 + dur2 - crossfade_duration
+
+            cmd = [
+                ffmpeg,
+                '-i', trimmed_paths[0],
+                '-i', trimmed_paths[1],
+                '-i', trimmed_paths[2],
+                '-filter_complex',
+                f"[0:v][1:v]xfade=transition=fade:duration={crossfade_duration}:offset={offset1}[v01];"
+                f"[v01][2:v]xfade=transition=fade:duration={crossfade_duration}:offset={offset2}[v];"
+                f"[0:a][1:a]acrossfade=d={crossfade_duration}[a01];"
+                f"[a01][2:a]acrossfade=d={crossfade_duration}[a]",
+                '-map', '[v]', '-map', '[a]',
+                '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
+                '-c:a', 'aac', '-b:a', '128k',
+                '-y', output_path
+            ]
+        else:
+            print(f"    Unsupported clip count for local concat: {len(trimmed_paths)}")
+            return None
+
+        result = subprocess.run(cmd, capture_output=True, timeout=180)
+        if result.returncode != 0:
+            print(f"    Local crossfade concat failed: {result.stderr.decode()[:300]}")
+            return None
+
+        with open(output_path, 'rb') as f:
+            video_bytes = f.read()
+        print(f"    Crossfade concatenated: {len(video_bytes) / 1024 / 1024:.1f} MB")
+        return video_bytes
+
+    finally:
+        # Clean up temp directory
+        import shutil
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _get_video_duration(ffmpeg_path, video_path):
+    """Get video duration in seconds using ffprobe."""
+    import subprocess
+    # Only replace the binary name, not directory parts like 'ffmpeg-full'
+    dir_name = os.path.dirname(ffmpeg_path)
+    ffprobe = os.path.join(dir_name, 'ffprobe')
+    cmd = [
+        ffprobe, '-v', 'quiet',
+        '-show_entries', 'format=duration',
+        '-of', 'default=noprint_wrappers=1:nokey=1',
+        video_path
+    ]
+    result = subprocess.run(cmd, capture_output=True, timeout=10)
+    try:
+        return float(result.stdout.decode().strip())
+    except (ValueError, AttributeError):
+        return 8.0  # default assumption
+
+
+# ffmpeg-full path (has drawtext, ass, subtitles filters)
+FFMPEG_BIN = '/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg'
+
+
+def _get_ffmpeg():
+    """Return path to ffmpeg with text/subtitle support."""
+    import shutil
+    if os.path.isfile(FFMPEG_BIN):
+        return FFMPEG_BIN
+    # Fallback to system ffmpeg
+    return shutil.which('ffmpeg')
+
+
+def _overlay_hook_text(video_path, hook_text):
+    """Burn bold hook text onto the first 3 seconds of the video using ffmpeg.
+    Text scales in from small to full size over 0.5s (stepped), centered on screen."""
+    import subprocess
+
+    ffmpeg = _get_ffmpeg()
+    if not hook_text or not ffmpeg:
+        return video_path
+
+    def _escape_drawtext(text):
+        """Escape special chars for ffmpeg drawtext filter."""
+        t = text.replace("\\", "\\\\").replace("'", "'\\''")
+        return t.replace(":", "\\:").replace("%", "%%")
+
+    # Stepped scale-in: 5 sizes over 0.5s, then hold at full size until 3s
+    SCALE_STEPS = [
+        (0, 0.10, 20),
+        (0.10, 0.20, 30),
+        (0.20, 0.30, 40),
+        (0.30, 0.40, 50),
+        (0.40, 3.0, 56),
+    ]
+
+    def _build_filters_for_text(escaped_text, y_expr):
+        """Build chained drawtext filters for one line of text with scale-in."""
+        parts = []
+        for t_start, t_end, fs in SCALE_STEPS:
+            parts.append(
+                f"drawtext=text='{escaped_text}'"
+                f":fontfile={font}:fontsize={fs}:fontcolor=yellow"
+                f":borderw=4:bordercolor=black"
+                f":box=1:boxcolor=black@0.6:boxborderw=12"
+                f":x=(w-text_w)/2:y={y_expr}"
+                f":enable='between(t,{t_start},{t_end})'"
+            )
+        return ','.join(parts)
+
+    tmp_path = video_path.replace('.mp4', '_tmp.mp4')
+    font = "/System/Library/Fonts/Helvetica.ttc"
+
+    # Auto-wrap: split into 2 lines if text is too long for 720px portrait
+    if len(hook_text) > 18:
+        mid = len(hook_text) // 2
+        split_idx = hook_text.rfind(' ', 0, mid + 5)
+        if split_idx == -1:
+            split_idx = hook_text.find(' ', mid)
+        if split_idx != -1:
+            line1 = _escape_drawtext(hook_text[:split_idx])
+            line2 = _escape_drawtext(hook_text[split_idx + 1:])
+            # Center 2-line block: line1 above midpoint, line2 below
+            filters1 = _build_filters_for_text(line1, '(h/2)-text_h-6')
+            filters2 = _build_filters_for_text(line2, '(h/2)+6')
+            filter_str = filters1 + ',' + filters2
+        else:
+            safe_text = _escape_drawtext(hook_text)
+            filter_str = _build_filters_for_text(safe_text, '(h-text_h)/2')
+    else:
+        safe_text = _escape_drawtext(hook_text)
+        filter_str = _build_filters_for_text(safe_text, '(h-text_h)/2')
+
+    cmd = [
+        ffmpeg, '-i', video_path,
+        '-vf', filter_str,
+        '-codec:a', 'copy',
+        '-y', tmp_path
+    ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=60)
+        if result.returncode == 0:
+            os.replace(tmp_path, video_path)
+            print(f"    Hook text overlay applied")
+            return video_path
+        else:
+            print(f"    ffmpeg overlay failed: {result.stderr.decode()[:200]}")
+    except Exception as e:
+        print(f"    ffmpeg overlay error: {e}")
+
+    # Clean up temp file on failure
+    if os.path.exists(tmp_path):
+        os.remove(tmp_path)
+    return video_path
+
+
+def _add_captions(video_path, script_text):
+    """Add word-by-word TikTok-style captions to the video using ffmpeg ASS subtitles."""
+    import subprocess
+
+    ffmpeg = _get_ffmpeg()
+    if not script_text or not ffmpeg:
+        return video_path
+
+    # Split script into words
+    words = script_text.split()
+    if not words:
+        return video_path
+
+    # Estimate total video duration (~20s for 3-clip concatenation)
+    total_duration = 20.0
+
+    # Distribute words evenly across the video
+    word_duration = total_duration / len(words)
+
+    # Group words into display phrases of 3-4 words
+    phrase_size = 4
+    phrases = []
+    for i in range(0, len(words), phrase_size):
+        chunk = words[i:i + phrase_size]
+        start_time = i * word_duration
+        phrases.append({
+            'words': chunk,
+            'start_idx': i,
+            'start_time': start_time,
+        })
+
+    # ASS header with TikTok-style formatting
+    ass_header = """[Script Info]
+Title: TikTok Captions
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+WrapStyle: 0
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Helvetica,52,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,0,2,40,40,180,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+
+    # Build ASS dialogue events with word-by-word highlighting
+    events = []
+    for phrase in phrases:
+        phrase_words = phrase['words']
+        phrase_start_idx = phrase['start_idx']
+
+        # Each word within the phrase gets its own highlight event
+        for word_offset, _ in enumerate(phrase_words):
+            global_idx = phrase_start_idx + word_offset
+            word_start = global_idx * word_duration
+            word_end = (global_idx + 1) * word_duration
+
+            # Build the display line: highlight current word in yellow, rest in white
+            parts = []
+            for j, w in enumerate(phrase_words):
+                # Escape ASS special characters
+                escaped = w.replace('\\', '\\\\').replace('{', '\\{').replace('}', '\\}')
+                if j == word_offset:
+                    # Current word: yellow highlight
+                    parts.append('{\\c&H00FFFF&}' + escaped)
+                else:
+                    # Other words: white
+                    parts.append('{\\c&HFFFFFF&}' + escaped)
+
+            line_text = ' '.join(parts)
+
+            # Format timestamps as H:MM:SS.CC
+            def fmt_time(t):
+                h = int(t // 3600)
+                m = int((t % 3600) // 60)
+                s = t % 60
+                return f"{h}:{m:02d}:{s:05.2f}"
+
+            events.append(
+                f"Dialogue: 0,{fmt_time(word_start)},{fmt_time(word_end)},Default,,0,0,0,,"
+                f"{line_text}"
+            )
+
+    # Write ASS file
+    ass_path = video_path.replace('.mp4', '_captions.ass')
+    with open(ass_path, 'w') as f:
+        f.write(ass_header)
+        f.write('\n'.join(events))
+        f.write('\n')
+
+    # Burn subtitles onto video
+    tmp_path = video_path.replace('.mp4', '_captioned.mp4')
+    cmd = [
+        ffmpeg, '-i', video_path,
+        '-vf', f"ass={ass_path}",
+        '-codec:a', 'copy',
+        '-y', tmp_path
+    ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=120)
+        if result.returncode == 0:
+            os.replace(tmp_path, video_path)
+            print(f"    Captions added ({len(words)} words, {len(phrases)} phrases)")
+        else:
+            print(f"    ffmpeg captions failed: {result.stderr.decode()[:200]}")
+    except Exception as e:
+        print(f"    ffmpeg captions error: {e}")
+
+    # Clean up temp files
+    for tmp in [ass_path, tmp_path]:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+    return video_path
+
+
 def generate_tiktok_video_flow(article_data):
     """Generate a TikTok video via useapi.net Google Flow (Veo 3.1 Fast).
     Returns file path to saved video, or None on failure."""
@@ -555,9 +904,10 @@ def generate_tiktok_video_flow(article_data):
         media_ids.append(ext_id)
         print(f"    Extension {i + 1} ready: {ext_id[:40]}...")
 
-    # Step 7: Concatenate or download single clip
+    # Step 7: Concatenate clips (server-side, no fades)
+    video_data = None
     if len(media_ids) >= 2:
-        print(f"  [Flow] Step 7: Concatenating {len(media_ids)} clips...")
+        print(f"  [Flow] Step 7: Concatenating {len(media_ids)} clips (server)...")
         video_data = _flow_concatenate(media_ids)
     else:
         # Only 1 clip — download directly from URL
@@ -581,6 +931,18 @@ def generate_tiktok_video_flow(article_data):
 
     file_size = os.path.getsize(output_path)
     print(f"  Video saved: {output_path} ({file_size / 1024 / 1024:.1f} MB)")
+
+    # Step 8: Add captions
+    script_text = video_prompt.get('script', '')
+    if script_text:
+        print(f"  [Flow] Step 8: Adding word-by-word captions...")
+        _add_captions(output_path, script_text)
+
+    # Step 9: Overlay hook text (AFTER captions so it renders on top)
+    hook_text = video_prompt.get('hook_text', '')
+    if hook_text:
+        print(f"  [Flow] Step 9: Overlaying hook text: {hook_text}")
+        _overlay_hook_text(output_path, hook_text)
 
     # Save outfit to history for future variation
     try:
@@ -845,6 +1207,14 @@ The first 3 seconds must be visually attention-grabbing too:
 
 HOOK TEST: Would someone scrolling at full speed STOP for this? If not → make it bolder.
 
+HOOK TEXT OVERLAY RULE
+A bold text overlay will be burned onto the first 3 seconds of the video. You must provide a "hook_text" field with a SHORT, ALL-CAPS phrase (max 5 words) that:
+• Highlights the most shocking number, fact, or claim from the story
+• Works VISUALLY — someone scrolling with sound off should stop for this text alone
+• Is DIFFERENT from the spoken hook (complementary, not redundant)
+• Uses concrete specifics: dollar amounts, company names, shocking verbs
+• Examples: "$334K SETTLEMENT", "FIRED FOR REPORTING ABUSE", "FDA RECALL ALERT"
+
 UNIVERSAL UNDERSTANDING RULE (CRITICAL)
 Simplify the EXPLANATION, not the hook. The hook can be provocative and punchy — simplicity applies to the legal insight and information that follows.
 
@@ -855,12 +1225,25 @@ For the explanation sections (not the hook):
 • Use real life comparisons when helpful
 • A teenager and a stressed adult should both understand it after one listen
 
+INFORMATIVE CONTENT RULE (CRITICAL)
+Every video must teach the viewer something SPECIFIC. Do NOT be vague.
+
+REQUIRED in every script:
+• At least ONE specific number (settlement amount, fine, number of victims, statute of limitations)
+• The company/entity name or specific situation from the article
+• ONE actionable insight the viewer can use ("if this happened to you, you have X months to file")
+
+BANNED:
+• Vague platitudes ("know your rights", "justice matters", "stay informed")
+• Generic legal advice that could apply to anything
+• Repeating the same insight across videos
+• Talking about the law without connecting it to the specific story
+
 PERFORMANCE STRUCTURE
-0–3 sec → Hook (scroll-stopping opener)
-3–7 sec → Problem or myth
-7–13 sec → Insight
-13–18 sec → Why it matters
-18–20 sec → Takeaway or closing thought
+0–3 sec → Hook (provocative scroll-stopping opener — bold claim, shocking fact, or dramatic question)
+3–8 sec → The Story (what actually happened — specific names, numbers, consequences)
+8–15 sec → Why You Should Care (authoritative expert — actionable legal insight in plain language)
+15–20 sec → Soft CTA + Close (warm, natural sign-off mentioning casevalue.law)
 
 HUMOR + SEXUAL INNUENDO RULE (REQUIRED)
 
@@ -888,6 +1271,24 @@ Overall humor style:
 • Clever and witty
 • Confident and sexually bold
 • The kind of humor that makes you rewatch to catch what she said
+
+VEO SAFETY RULE (CRITICAL — VIDEO GENERATION WILL FAIL WITHOUT THIS)
+The VIDEO PROMPTS (initial_prompt, extension_prompts) are sent to Veo for video generation.
+Veo has a strict content filter that REJECTS any sexually suggestive visual descriptions.
+
+ALLOWED in video prompts:
+• The spoken dialogue in "quotes" CAN contain witty innuendo and double meanings (audio only)
+• Valentina can smile, laugh, or give a confident/knowing look
+
+BANNED in video prompts (will cause generation failure):
+• Words: "suggestive", "flirty", "seductive", "sultry", "sexual", "sensual", "provocative" (when describing visuals)
+• Describing body movements as suggestive or sexual
+• Directing Valentina to give "suggestive looks" or "flirty" expressions
+• Any description of physical attractiveness or body-focused camera work
+• References to "pull out", "going down", or other phrases that read as sexual in visual context
+
+The innuendo lives in the WORDS she speaks, NOT in how the video prompt describes her actions.
+Keep all visual action descriptions professional: "she smiles warmly", "confident expression", "gestures toward viewer".
 
 AUDIO RULE
 Valentina dialogue is the ONLY audio.
@@ -933,10 +1334,10 @@ CONTINUITY RULE (CRITICAL)
 The video MUST feel like ONE CONTINUOUS TAKE from a single recording session.
 
 Camera style:
-• Real handheld phone footage feel — visible sway, not gimbal-stabilized
+• Real handheld camera feel — visible sway, not gimbal-stabilized
 • Natural imperfections: slight drift, occasional minor reframing as she adjusts grip
-• Occasional subtle focus hunting moments (phone autofocus behavior)
-• NO tripod-locked static feel and NO gimbal-smooth feel — should look like a real person holding a phone
+• Occasional subtle focus hunting moments (natural autofocus behavior)
+• NO tripod-locked static feel and NO gimbal-smooth feel — should look like natural handheld footage
 • General framing stays consistent but with natural hand movement throughout
 
 For STATIC format:
@@ -952,12 +1353,12 @@ For WALK-AND-TALK format:
 • Valentina must NOT be holding a phone at any point — both hands free for gestures
 
 For LOCATION-TOUR format:
-• Camera (held by friend) can be behind, beside, or facing Valentina — varies naturally
-• Camera position can shift as the friend repositions (natural movement, not jump cuts)
-• Valentina progresses through the space — same location, different areas
-• Maintain location continuity — same venue, progressing naturally through it
-• Mix of medium and full body shots as friend adjusts distance
-• Friend filming may occasionally shift angle (front to side, side to behind) — this is natural
+• Camera MUST always face Valentina from the FRONT or slight angle — NEVER from behind
+• Valentina MUST always face the camera — she NEVER turns her back to it
+• Camera position stays mostly consistent — friend walks alongside or in front
+• Valentina can gesture at surroundings while FACING the camera (pointing, glancing sideways briefly)
+• Maintain location continuity — same venue, same area, same props and objects throughout
+• NO new objects, poles, furniture, or structural elements may appear between segments
 
 ZERO TOLERANCE FOR VISIBLE CUTS (CRITICAL)
 Each extension MUST begin at the EXACT same state as the previous segment ended:
@@ -1012,15 +1413,15 @@ Movement authenticity:
 
 REALISM TEST:
 Would a viewer scrolling TikTok think this is just another creator making content? If it looks like a production or AI → revise prompts.
-The goal: indistinguishable from a real person filming herself on her phone.
+The goal: indistinguishable from a real creator making content.
 
-PHONE CAMERA AESTHETIC RULE
-This is filmed on a smartphone, NOT a cinema camera. Always include:
+CAMERA AESTHETIC RULE
+This is filmed casually, NOT on a cinema camera. Always include:
 • Smartphone wide-angle lens characteristics (slight barrel distortion at edges, mostly sharp with natural bokeh at distance)
 • Auto-exposure behavior: slight brightness shifts when camera moves between light/shadow areas
 • Natural phone camera colors — no cinematic color grading, no teal-and-orange, no film grain
 • Auto-white-balance: slight color temperature shifts when panning between different light sources
-• NEVER describe cinematic lenses (35mm, 50mm, anamorphic) — this is a phone
+• NEVER describe cinematic lenses (35mm, 50mm, anamorphic) — this is casual handheld
 
 LENGTH RULE
 Script must sound natural when spoken in 18–20 seconds.
@@ -1105,33 +1506,43 @@ The full script MUST be split across the initial_prompt and exactly 2 extension_
 
 SPLIT AT SENTENCE BOUNDARIES: Always split the script between complete sentences — NEVER split mid-sentence. Each segment should contain 1-3 complete sentences (~15-18 words). The dialogue in each segment must be self-contained and start at a sentence beginning.
 
-EXTENSION TIMING: Each extension clip's first ~1 second overlaps with the previous clip and gets trimmed. To prevent dialogue from being cut off, each extension segment must begin with ~1 second of SILENT continuation (same pose, natural breathing, maybe a subtle gesture or expression shift) BEFORE the new dialogue starts. Do NOT start speaking new words until after the first second. The initial_prompt does NOT need this silent buffer — only extensions do.
+TRANSITION TIMING
+The video is made of 3 clips joined together. Each extension clip's first ~1 second overlaps with the previous clip and gets trimmed.
+
+START-OF-EXTENSION SILENCE: Each extension segment must begin with ~1.5 seconds of SILENT continuation (same pose, natural breathing, subtle expression shift, NO new words spoken) BEFORE the new dialogue starts. This provides buffer for the clip transition.
+
+Dialogue in each clip should flow NATURALLY to the end — do NOT artificially cut off dialogue early. Let sentences finish naturally. The start-of-extension buffer handles the transition.
 
 OUTPUT FORMAT
 Return ONLY valid JSON.
 
 {{
-"script": "Full 18–20 second spoken script (~45–55 words)",
-"appearance": "Describe Valentina's outfit and look for this video. IMPORTANT: Valentina has TWO natural biological legs — NEVER mention a prosthetic, artificial limb, or amputation. STYLE GUIDE: Athleisure meets professional casual. Tops must be form-fitting with low necklines (V-necks, scoop necks, ribbed tanks, wrap tops) — bust accentuated. Bottoms: fitted leggings, joggers, or tailored jeans. Colors: neutrals and earth tones (black, white, cream, beige, olive, tan, charcoal, rust, sage). Hair: always long red-auburn wavy hair, styling can vary (down, ponytail, half-up, loose braid). Accessories: minimal — small earrings, simple chain necklace, or a watch only. Footwear: sneakers, ankle boots, or sandals. NEVER: costumes, corporate suits, glasses, hats, scarves, prosthetic legs. Must differ from previous outfits listed above — vary the specific top style, bottom, colors, and hair styling while staying within the style guide.",
+"hook_text": "SHORT ALL-CAPS TEXT for screen overlay during first 3 seconds. Ideally 2-3 words, max 4. Must fit on a narrow portrait screen. Bold, shocking, scroll-stopping. Must highlight the most shocking number, fact, or claim. Examples: '$200K PAYOUT', 'FIRED FOR SAFETY', 'YOUR DOCTOR LIED'. Must be different from the spoken hook.",
+"script": "Full spoken script (~45–55 words across ~17 seconds of dialogue). Must include specific facts from the article (dollar amounts, company names, what happened). End with a natural casevalue.law mention.",
+"appearance": "Describe Valentina's outfit and look for this video. IMPORTANT: Valentina has TWO natural biological legs — NEVER mention a prosthetic, artificial limb, or amputation. STYLE GUIDE — pick ONE category per video and rotate between them: (1) ATHLEISURE: sports bras, ribbed tanks, crop tops, leggings, joggers, sneakers. (2) SEXY/INFLUENCER: bodycon dresses, mini skirts, low-cut tops, off-shoulder tops, heels, thigh-high boots, fitted jeans. (3) SMART CASUAL: blazer over tee or tank, tailored trousers, button-down shirts, midi skirts, loafers, ankle boots. Colors: any — neutrals, earth tones, bold colors, pastels are all fine. Hair: always long red-auburn wavy hair, styling can vary (down, ponytail, half-up, loose braid, swept to one side). Accessories: minimal — small earrings, simple chain necklace, or a watch only. NEVER: costumes, glasses, hats, scarves, prosthetic legs. Must differ from previous outfits listed above — pick a DIFFERENT style category and vary specific pieces, colors, and hair styling.",
 "actions": "Highly specific gestures tied to exact words being spoken.",
 "setting": "Visually interesting environment relevant to topic.",
 "initial_prompt": "Veo prompt for first 8 seconds. MUST include the first ~15-18 words of dialogue in quotes. Include full scene, lighting, camera framing, and gestures tied to specific dialogue words.",
 "extension_prompts": [
-"Seconds 8–14: First ~1 second is SILENT — same pose, natural breathing, subtle expression shift, NO new words spoken (this overlap gets trimmed). Then at ~1 second mark, begin the next sentence of dialogue in exact quotes (~15-18 words). Continue from the EXACT frame where the previous segment ended (same position, lighting, background, framing). Specific gestures tied to specific dialogue words.",
-"Seconds 14–20: First ~1 second is SILENT — same pose, natural breathing, subtle expression shift, NO new words spoken (this overlap gets trimmed). Then at ~1 second mark, begin the final sentence(s) of dialogue in exact quotes (~15-18 words). Continue from the EXACT frame where the previous segment ended (same position, lighting, background, framing). Closing moment with emotional delivery and strong ending."
+"Seconds 8–15: First ~1.5 seconds are SILENT — same pose, natural breathing, subtle expression shift, NO new words spoken (overlap buffer from previous clip). Then at ~1.5 second mark, begin the next sentence of dialogue in exact quotes (~15-18 words). Continue from the EXACT frame where the previous segment ended (same position, lighting, background, framing). Specific gestures tied to specific dialogue words.",
+"Seconds 15–20: First ~1.5 seconds are SILENT — same pose, natural breathing, subtle expression shift, NO new words spoken (overlap buffer from previous clip). Then at ~1.5 second mark, begin the final sentence(s) of dialogue in exact quotes (~15-18 words). Continue from the EXACT frame where the previous segment ended (same position, lighting, background, framing). Closing moment with emotional delivery and strong ending."
 ]
 }}
 
-NATURAL CLOSE (IMPORTANT)
-The video should end with a strong closing moment, not trail off or feel abrupt.
+CLOSING + CTA (REQUIRED — EVERY VIDEO)
+Every video MUST end with a natural mention of casevalue.law. This is NOT a hard sell — it's a helpful recommendation from someone who cares.
 
-Closing strategies (pick the best fit):
-• Punchy one-liner that summarizes the key insight
-• Rhetorical question that makes viewers think and drives comments
-• Relatable "what would you do?" moment
-• Callback to the hook (creates a loop effect that drives replays)
-• Confident closing statement with a knowing look or slight smile
-• Valentina can mention casevalue.law casually if it fits, but NEVER as a pitch
+CTA styles (rotate for variety):
+• Helpful friend: "If you think this might apply to you, check out casevalue.law — they'll tell you what your case could be worth."
+• Curious invitation: "Want to know what a case like this is actually worth? casevalue.law breaks it all down."
+• Empowering: "Knowledge is power — head to casevalue.law to find out where you stand."
+• Casual mention: "I'll leave a link to casevalue.law in the bio if you want to dig deeper."
+
+CTA RULES:
+• Must feel like a natural part of the conversation, NOT a commercial break
+• NEVER use "call now", "act fast", "limited time", or other hard-sell language
+• Valentina's tone should stay warm and helpful during the CTA
+• The CTA should connect to the specific topic discussed (not generic)
 
 Energy during close:
 • Slightly warmer and more personal
@@ -1155,16 +1566,18 @@ Every video must vary:
 REFERENCE IMAGE OVERRIDE RULE (CRITICAL)
 The reference images show Valentina with one specific look, but you MUST create varied appearances within her style guide.
 
-For the "appearance" field — follow Valentina's STYLE GUIDE:
-• Athleisure meets professional casual — sporty, polished, approachable
-• Tops: ALWAYS form-fitting with low necklines (V-necks, scoop necks, ribbed tanks, wrap tops) — bust accentuated
-• Bottoms: fitted leggings, joggers, tailored jeans, fitted trousers
-• Colors: neutrals and earth tones ONLY — black, white, cream, beige, olive, tan, charcoal, rust, sage, gray
-• Hair: ALWAYS long red-auburn wavy hair — vary styling only (down, ponytail, half-up, loose braid, swept to one side)
-• Accessories: minimal jewelry ONLY — small earrings, simple chain/necklace, maybe a watch. NO glasses, hats, or scarves
-• Footwear: clean sneakers, ankle boots, or sandals depending on setting
-• NEVER: costumes, themed outfits, corporate suits, heavy formal wear
-• Vary the specific pieces within these constraints — different top style, different bottom, different color combo, different hair styling
+For the "appearance" field — pick ONE style category per video and ROTATE between them:
+
+CATEGORY 1 — ATHLEISURE: sports bras, ribbed tanks, crop tops, leggings, joggers, sneakers, athletic jackets
+CATEGORY 2 — SEXY/INFLUENCER: bodycon dresses, mini skirts, low-cut tops, off-shoulder tops, crop tops with high-waisted jeans, heels, thigh-high boots, fitted dresses
+CATEGORY 3 — SMART CASUAL: blazer over tee or tank, tailored trousers, button-down shirts (can be tied or unbuttoned), midi skirts, loafers, ankle boots, cardigans
+
+• Colors: ANY — neutrals, earth tones, bold colors (red, cobalt, emerald), pastels, black, white — full range
+• Hair: ALWAYS long red-auburn wavy hair — vary styling (down, ponytail, half-up, loose braid, swept to one side, messy waves)
+• Accessories: minimal — small earrings, simple chain/necklace, maybe a watch. NO glasses, hats, or scarves
+• Footwear: varies by category — sneakers, heels, boots, sandals, loafers
+• NEVER: costumes, themed outfits, glasses, hats, scarves
+• MUST pick a DIFFERENT category than previous outfits — maximize variety across videos
 
 The reference images are for facial features only — NOT for outfit/hair consistency.
 Be creative within the style constraints above.
@@ -1226,10 +1639,14 @@ Be creative within the style constraints above.
         # Condensed rules (no redundant suffix — single injection)
         veo_rules = (
             "RULES: Valentina MUST be actively speaking — mouth visibly moving, facial expressions changing, "
-            "natural hand gestures. She is a real person talking to camera, NOT a still image. "
+            "natural hand gestures. She is a real person talking to camera, NOT a still image. Lip movements MUST precisely match spoken audio — every word's mouth shape syncs with the sound. "
+            "FACE ON SCREEN AT ALL TIMES (CRITICAL): Valentina's face MUST be clearly visible in EVERY frame of the video. "
+            "She MUST face the camera directly — NEVER turn her head away, NEVER look to the side for more than a split second, "
+            "NEVER turn her back, NEVER walk away from camera. Her face fills the upper third of the frame at all times. "
+            "The camera MUST stay in front of her — no profile shots, no behind shots, no over-shoulder angles. "
             "Valentina has TWO natural biological legs — NO prosthetic leg, NO artificial limb, NO metal leg, NO amputation. "
             "Both legs are completely natural and human. "
-            "ZERO text/subtitles/captions/UI/phones in frame. Raw phone footage look. "
+            "ZERO text/subtitles/captions/UI/phones/hands/cameras in frame. Natural handheld camera feel. "
         )
 
         # Extension prefix adds face lock + continuity (since extensions can't use reference images)
@@ -1242,10 +1659,13 @@ Be creative within the style constraints above.
             "Start from the EXACT last frame of the previous segment — same body position, same hand placement, "
             "same head angle, same facial expression, same camera distance, same lighting, same background. "
             "The transition must be INVISIBLE — a viewer should not be able to tell where one clip ends and the next begins. "
-            "OVERLAP BUFFER: The first ~1 second of this clip overlaps with the previous clip and will be trimmed. "
-            "During this first second, maintain the SAME pose and expression — NO new words spoken, just natural breathing "
-            "and subtle movement. New dialogue begins AFTER the first second. "
-            "Do NOT reset pose, do NOT change camera angle, do NOT shift lighting. "
+            "Valentina MUST face the camera at ALL times — NEVER turn her back to camera, NEVER look away for more than a glance. "
+            "NO new objects, poles, props, or structural elements may appear that were not visible in the previous clip. "
+            "The voice MUST remain the SAME — same pitch, same tone, same speaking style as previous segment. "
+            "OVERLAP BUFFER: The first ~1.5 seconds of this clip overlap with the previous clip (first second is trimmed, remaining 0.5s provides margin). "
+            "During these first 1.5 seconds, maintain the SAME pose and expression — NO new words spoken, just natural breathing "
+            "and subtle movement. New dialogue begins AFTER 1.5 seconds. "
+            "Do NOT reset pose, do NOT change camera angle, do NOT shift lighting. Do NOT introduce new objects or scenery. "
         )
         if appearance_desc:
             ext_prefix += f"APPEARANCE: {appearance_desc} "
