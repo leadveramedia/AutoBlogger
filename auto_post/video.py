@@ -9,6 +9,7 @@ import time
 import random
 import base64
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from google import genai
 from google.genai import types
@@ -830,8 +831,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return video_path
 
 
-def generate_tiktok_video_flow(article_data):
+def generate_tiktok_video_flow(article_data, variant_suffix='', precomputed_prompt=None):
     """Generate a TikTok video via useapi.net Google Flow (Veo 3.1 Fast).
+
+    Args:
+        article_data: Article data dict (must have 'slug' key)
+        variant_suffix: Optional suffix for output filename (e.g., '_v1', '_v2')
+        precomputed_prompt: Optional pre-generated prompt dict (skips generation if provided)
+
     Returns file path to saved video, or None on failure."""
     slug = article_data.get('slug', 'untitled')
 
@@ -839,11 +846,15 @@ def generate_tiktok_video_flow(article_data):
         print("  Error: USEAPI_TOKEN not set, skipping Flow video generation")
         return None
 
-    # Step 1: Generate prompts (reuse existing Gemini prompt generator)
-    print("  [Flow] Step 1: Generating video script and prompts...")
-    video_prompt = generate_video_prompt(article_data)
-    if not video_prompt:
-        return None
+    # Step 1: Generate prompts (or use precomputed)
+    if precomputed_prompt:
+        print("  [Flow] Step 1: Using precomputed video script and prompts...")
+        video_prompt = precomputed_prompt
+    else:
+        print("  [Flow] Step 1: Generating video script and prompts...")
+        video_prompt = generate_video_prompt(article_data)
+        if not video_prompt:
+            return None
 
     # Step 2: Upload reference images
     print("  [Flow] Step 2: Uploading reference images...")
@@ -925,7 +936,7 @@ def generate_tiktok_video_flow(article_data):
         return None
 
     # Step 6: Save
-    output_path = os.path.join(VIDEOS_DIR, f"{slug}.mp4")
+    output_path = os.path.join(VIDEOS_DIR, f"{slug}{variant_suffix}.mp4")
     with open(output_path, 'wb') as f:
         f.write(video_data)
 
@@ -955,9 +966,15 @@ def generate_tiktok_video_flow(article_data):
     return output_path
 
 
-def generate_video_prompt(article_data):
+def generate_video_prompt(article_data, video_format=None):
     """
     Use Gemini to generate a detailed video prompt from article content.
+
+    Args:
+        article_data: Article data dict
+        video_format: Optional video format ('static', 'walk-and-talk', 'location-tour').
+                     If None, randomly selects one.
+
     Returns dict with script, appearance, actions, setting, and Veo prompts.
     """
     if not GEMINI_API_KEY:
@@ -983,8 +1000,9 @@ def generate_video_prompt(article_data):
             outfit_context += f"{i}. {outfit}\n"
         outfit_context += "\nDo NOT repeat any of these looks. Create something completely different.\n"
 
-    # Randomly select video format
-    video_format = random.choice(['static', 'walk-and-talk', 'location-tour'])
+    # Select video format (or use provided one)
+    if video_format is None:
+        video_format = random.choice(['static', 'walk-and-talk', 'location-tour'])
     print(f"  Selected format: {video_format}")
 
     # Build format-specific instructions
@@ -1704,3 +1722,62 @@ def generate_tiktok_video(article_data):
     os.makedirs(VIDEOS_DIR, exist_ok=True)
 
     return generate_tiktok_video_flow(article_data)
+
+
+def generate_three_videos(article_data):
+    """
+    Generate 3 videos (static, walk-and-talk, location-tour) from the same article
+    with different AI-generated prompts. Runs in parallel for efficiency.
+
+    Returns list of file paths (only successful videos), or empty list on complete failure.
+    """
+    slug = article_data.get('slug', 'untitled')
+    print(f"\n--- Generating 3 TikTok Video Variants for: {slug} ---")
+
+    os.makedirs(VIDEOS_DIR, exist_ok=True)
+
+    formats = ['static', 'walk-and-talk', 'location-tour']
+    suffixes = ['_v1', '_v2', '_v3']
+
+    # Pre-generate prompts sequentially to avoid outfit history race conditions
+    print("\n  Pre-generating prompts for all 3 formats...")
+    prompts = []
+    for fmt in formats:
+        print(f"    Generating prompt for {fmt}...")
+        prompt = generate_video_prompt(article_data, video_format=fmt)
+        prompts.append(prompt)
+
+    # Filter out None prompts
+    valid_prompts = [(suffix, prompt) for suffix, prompt in zip(suffixes, prompts) if prompt is not None]
+    if not valid_prompts:
+        print("  Failed to generate any prompts, aborting video generation")
+        return []
+
+    # Generate videos in parallel using ThreadPoolExecutor
+    print(f"\n  Generating {len(valid_prompts)} videos in parallel...")
+    results = []
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = {
+            executor.submit(
+                generate_tiktok_video_flow,
+                article_data,
+                variant_suffix=suffix,
+                precomputed_prompt=prompt
+            ): suffix
+            for suffix, prompt in valid_prompts
+        }
+
+        for future in as_completed(futures):
+            suffix = futures[future]
+            try:
+                path = future.result()
+                if path:
+                    results.append(path)
+                    print(f"  ✓ Video {suffix} completed: {path}")
+                else:
+                    print(f"  ✗ Video {suffix} failed (returned None)")
+            except Exception as e:
+                print(f"  ✗ Video {suffix} failed with exception: {e}")
+
+    print(f"\n  Generated {len(results)} videos successfully")
+    return results

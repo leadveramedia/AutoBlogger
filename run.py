@@ -30,9 +30,9 @@ from auto_post import (
     save_title_list,
     load_used_topics,
     add_used_topic,
+    generate_three_videos,
 )
 from auto_post.config import GEMINI_API_KEY, SANITY_PROJECT_ID, SANITY_TOKEN, ENABLE_VIDEO_GENERATION
-from auto_post.video import generate_tiktok_video
 
 
 def main():
@@ -159,15 +159,17 @@ def main():
         if i < len(selected_articles):
             time.sleep(2)
 
-    # Step 5.5: Generate TikTok video for first successful news article
+    # Step 5.5: Generate 3 TikTok video variants for first successful news article
     if ENABLE_VIDEO_GENERATION and video_article:
         print(f"\n{'='*60}")
-        print(f"  Generating TikTok Video for: {video_article.get('title', 'N/A')[:50]}")
+        print(f"  Generating 3 TikTok Video Variants for: {video_article.get('title', 'N/A')[:50]}")
         print(f"{'='*60}")
         try:
-            video_path = generate_tiktok_video(video_article)
-            if video_path:
-                print(f"  TikTok video saved: {video_path}")
+            video_paths = generate_three_videos(video_article)
+            if video_paths:
+                print(f"  Generated {len(video_paths)} TikTok videos:")
+                for path in video_paths:
+                    print(f"    - {path}")
             else:
                 print(f"  Video generation unsuccessful (article still published)")
         except Exception as e:
