@@ -622,7 +622,10 @@ def _get_ffmpeg():
     if os.path.isfile(FFMPEG_BIN):
         return FFMPEG_BIN
     # Fallback to system ffmpeg
-    return shutil.which('ffmpeg')
+    ffmpeg_path = shutil.which('ffmpeg')
+    if not ffmpeg_path:
+        print("  Warning: ffmpeg not found - captions and hook text will be skipped")
+    return ffmpeg_path
 
 
 def _overlay_hook_text(video_path, hook_text):
@@ -631,7 +634,10 @@ def _overlay_hook_text(video_path, hook_text):
     import subprocess
 
     ffmpeg = _get_ffmpeg()
-    if not hook_text or not ffmpeg:
+    if not hook_text:
+        return video_path
+    if not ffmpeg:
+        print(f"    Hook text overlay skipped (ffmpeg not available)")
         return video_path
 
     def _escape_drawtext(text):
@@ -663,7 +669,21 @@ def _overlay_hook_text(video_path, hook_text):
         return ','.join(parts)
 
     tmp_path = video_path.replace('.mp4', '_tmp.mp4')
-    font = "/System/Library/Fonts/Helvetica.ttc"
+
+    # Find available font (cross-platform)
+    font_candidates = [
+        "/System/Library/Fonts/Helvetica.ttc",  # macOS
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",  # Linux (DejaVu Sans)
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",  # Linux (Liberation Sans)
+        "Arial",  # Fallback to font name (if available on system)
+    ]
+    font = None
+    for f in font_candidates:
+        if os.path.isfile(f):
+            font = f
+            break
+    if not font:
+        font = "DejaVuSans-Bold"  # Last resort - hope it's installed
 
     # Auto-wrap: split into 2 lines if text is too long for 720px portrait
     if len(hook_text) > 18:
@@ -714,7 +734,10 @@ def _add_captions(video_path, script_text):
     import subprocess
 
     ffmpeg = _get_ffmpeg()
-    if not script_text or not ffmpeg:
+    if not script_text:
+        return video_path
+    if not ffmpeg:
+        print(f"    Captions skipped (ffmpeg not available)")
         return video_path
 
     # Split script into words
