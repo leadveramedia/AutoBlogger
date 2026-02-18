@@ -966,16 +966,10 @@ def generate_tiktok_video_flow(article_data, variant_suffix='', precomputed_prom
     file_size = os.path.getsize(output_path)
     print(f"  Video saved: {output_path} ({file_size / 1024 / 1024:.1f} MB)")
 
-    # Step 8: Add captions
-    script_text = video_prompt.get('script', '')
-    if script_text:
-        print(f"  [Flow] Step 8: Adding word-by-word captions...")
-        _add_captions(output_path, script_text)
-
-    # Step 9: Overlay hook text (AFTER captions so it renders on top)
+    # Step 8: Overlay hook text
     hook_text = video_prompt.get('hook_text', '')
     if hook_text:
-        print(f"  [Flow] Step 9: Overlaying hook text: {hook_text}")
+        print(f"  [Flow] Step 8: Overlaying hook text: {hook_text}")
         _overlay_hook_text(output_path, hook_text)
 
     # Save outfit to history for future variation
