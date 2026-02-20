@@ -156,6 +156,13 @@ NEWS_SOURCES = [
         'category': 'personal_injury',
         'enabled': True,
         'scraper': 'insurancejournal'
+    },
+    {
+        'name': 'NPR Law',
+        'url': 'https://www.npr.org/sections/law/',
+        'category': 'general_law',
+        'enabled': True,
+        'scraper': 'npr_law'
     }
 ]
 

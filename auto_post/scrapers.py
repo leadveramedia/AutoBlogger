@@ -548,6 +548,44 @@ def scrape_insurancejournal(url):
         return []
 
 
+def scrape_npr_law(url):
+    """Scrape NPR Law section for legal news."""
+    print(f"  Scraping NPR Law...")
+    news_items = []
+
+    try:
+        response = requests.get(url, headers=REQUEST_HEADERS, timeout=30)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        # NPR uses h2 tags inside .item-info divs for article headlines
+        headlines = soup.select('.item-info h2 a')
+
+        for link in headlines[:10]:
+            title = link.get_text(strip=True)
+            href = link.get('href', '')
+
+            if title and href:
+                # Try to get summary from nearby <p> teaser
+                item_info = link.find_parent(class_='item-info')
+                summary_tag = item_info.find('p', class_='teaser') if item_info else None
+                summary = summary_tag.get_text(strip=True)[:200] if summary_tag else ''
+
+                news_items.append({
+                    'title': title,
+                    'url': href if href.startswith('http') else urljoin(url, href),
+                    'summary': summary,
+                    'source': 'NPR Law',
+                    'category': 'general_law'
+                })
+
+        return news_items[:5]
+
+    except Exception as e:
+        print(f"  Error scraping NPR Law: {e}")
+        return []
+
+
 # Map scraper names to functions
 SCRAPERS = {
     'aboutlawsuits': scrape_aboutlawsuits,
@@ -564,7 +602,8 @@ SCRAPERS = {
     'onscenetv': scrape_onscenetv,
     'nhtsa': scrape_nhtsa,
     'dol': scrape_dol,
-    'insurancejournal': scrape_insurancejournal
+    'insurancejournal': scrape_insurancejournal,
+    'npr_law': scrape_npr_law
 }
 
 # General news sources that need keyword filtering
