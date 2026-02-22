@@ -1035,7 +1035,7 @@ PRE-WRITTEN SCRIPT (USE VERBATIM):
 For hook_text: Extract the single most shocking or attention-grabbing number, fact, or claim from the script and create a 2-4 word ALL-CAPS overlay text.
 """
 
-    prompt = f"""Given this article, create a high-retention 18–20 second vertical short-form video optimized for TikTok and Instagram Reels. Every video must maximize watch time, replays, and comments.
+    prompt = f"""Given this article, create a high-retention ~22 second vertical short-form video optimized for TikTok and Instagram Reels. Every video must maximize watch time, replays, and comments.
 
 ARTICLE TITLE: {title}
 ARTICLE SUMMARY: {excerpt}
@@ -1192,7 +1192,7 @@ PERFORMANCE STRUCTURE
 0–3 sec → Hook (provocative scroll-stopping opener — bold claim, shocking fact, or dramatic question)
 3–8 sec → The Story (what actually happened — specific names, numbers, consequences)
 8–15 sec → Why You Should Care (authoritative expert — actionable legal insight in plain language)
-15–20 sec → Soft CTA + Close (warm, natural sign-off mentioning casevalue.law)
+15–22 sec → Soft CTA + Close (warm, natural sign-off mentioning casevalue.law)
 
 HUMOR + SEXUAL INNUENDO RULE (REQUIRED)
 
@@ -1373,7 +1373,7 @@ This is filmed casually, NOT on a cinema camera. Always include:
 • NEVER describe cinematic lenses (35mm, 50mm, anamorphic) — this is casual handheld
 
 LENGTH RULE
-Script must sound natural when spoken in 18–20 seconds.
+Script must sound natural when spoken in ~22 seconds. Do NOT rush — leave natural pauses and breathing room between sentences.
 
 FINAL QA + SPELLCHECK + VIDEO QUALITY VERIFICATION (MANDATORY)
 Before returning final JSON output, perform ALL checks below.
@@ -1453,7 +1453,7 @@ Unnatural human
 DIALOGUE SPLITTING RULE (CRITICAL)
 The full script MUST be split across the initial_prompt and exactly 2 extension_prompts. Each prompt MUST contain its exact dialogue portion in "quotes". If any prompt has no quoted dialogue, the video will have silent dead air — this is a failure.
 
-SPLIT AT SENTENCE BOUNDARIES: Always split the script between complete sentences — NEVER split mid-sentence. Each segment should contain 1-3 complete sentences (~15-18 words). The dialogue in each segment must be self-contained and start at a sentence beginning.
+SPLIT AT SENTENCE BOUNDARIES: Always split the script between complete sentences — NEVER split mid-sentence. Each segment should contain 1-3 complete sentences (~13-17 words). The dialogue in each segment must be self-contained and start at a sentence beginning.
 
 TRANSITION TIMING
 The video is made of 3 clips joined together. Each extension clip's first ~1 second overlaps with the previous clip and gets trimmed.
@@ -1467,14 +1467,14 @@ Return ONLY valid JSON.
 
 {{
 "hook_text": "SHORT ALL-CAPS TEXT for screen overlay during first 3 seconds. Ideally 2-3 words, max 4. Must fit on a narrow portrait screen. Bold, shocking, scroll-stopping. Must highlight the most shocking number, fact, or claim. Examples: '$200K PAYOUT', 'FIRED FOR SAFETY', 'YOUR DOCTOR LIED'. Must be different from the spoken hook.",
-"script": "Full spoken script (~45–55 words across ~17 seconds of dialogue). Must include specific facts from the article (dollar amounts, company names, what happened). End with a natural casevalue.law mention.",
+"script": "Full spoken script (~40–50 words across ~19 seconds of dialogue). Keep pacing conversational and unhurried — do NOT cram too many words in. Must include specific facts from the article (dollar amounts, company names, what happened). End with a natural casevalue.law mention.",
 "appearance": "Describe Valentina's outfit and look for this video. BODY TYPE: Valentina has a curvy, full-figured hourglass build — full bust, defined waist, wider hips. Always describe her with this body type. NEVER describe her as slim, lean, petite, or athletic-thin. IMPORTANT: Valentina has TWO natural biological legs — NEVER mention a prosthetic, artificial limb, or amputation. STYLE GUIDE — pick ONE category per video and rotate between them: (1) ATHLEISURE: sports bras, ribbed tanks, crop tops, leggings, joggers, sneakers. (2) SEXY/INFLUENCER: bodycon dresses, mini skirts, low-cut tops, off-shoulder tops, heels, thigh-high boots, fitted jeans. (3) SMART CASUAL: blazer over tee or tank, tailored trousers, button-down shirts, midi skirts, loafers, ankle boots. Colors: any — neutrals, earth tones, bold colors, pastels are all fine. Hair: always long red-auburn wavy hair, styling can vary (down, ponytail, half-up, loose braid, swept to one side). Accessories: minimal — small earrings, simple chain necklace, or a watch only. NEVER: costumes, glasses, hats, scarves, prosthetic legs. Must differ from previous outfits listed above — pick a DIFFERENT style category and vary specific pieces, colors, and hair styling.",
 "actions": "Highly specific gestures tied to exact words being spoken.",
 "setting": "Visually interesting environment relevant to topic.",
-"initial_prompt": "Veo prompt for first 8 seconds. MUST include the first ~15-18 words of dialogue in quotes. Include full scene, lighting, camera framing, and gestures tied to specific dialogue words.",
+"initial_prompt": "Veo prompt for first 8 seconds. MUST include the first ~13-17 words of dialogue in quotes. Include full scene, lighting, camera framing, and gestures tied to specific dialogue words.",
 "extension_prompts": [
-"Seconds 8–15: First ~1.5 seconds are SILENT — same pose, natural breathing, subtle expression shift, NO new words spoken (overlap buffer from previous clip). Then at ~1.5 second mark, begin the next sentence of dialogue in exact quotes (~15-18 words). Continue from the EXACT frame where the previous segment ended (same position, lighting, background, framing). Specific gestures tied to specific dialogue words.",
-"Seconds 15–20: First ~1.5 seconds are SILENT — same pose, natural breathing, subtle expression shift, NO new words spoken (overlap buffer from previous clip). Then at ~1.5 second mark, begin the final sentence(s) of dialogue in exact quotes (~15-18 words). Continue from the EXACT frame where the previous segment ended (same position, lighting, background, framing). Closing moment with emotional delivery and strong ending."
+"Seconds 8–15: First ~1.5 seconds are SILENT — same pose, natural breathing, subtle expression shift, NO new words spoken (overlap buffer from previous clip). Then at ~1.5 second mark, begin the next sentence of dialogue in exact quotes (~13-17 words). Continue from the EXACT frame where the previous segment ended (same position, lighting, background, framing). Specific gestures tied to specific dialogue words.",
+"Seconds 15–22: First ~1.5 seconds are SILENT — same pose, natural breathing, subtle expression shift, NO new words spoken (overlap buffer from previous clip). Then at ~1.5 second mark, begin the final sentence(s) of dialogue in exact quotes (~13-17 words). Continue from the EXACT frame where the previous segment ended (same position, lighting, background, framing). Closing moment with emotional delivery and strong ending."
 ]
 }}
 
