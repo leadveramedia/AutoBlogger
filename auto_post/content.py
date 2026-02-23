@@ -286,6 +286,7 @@ Requirements:
 - Trustworthy and empathetic tone
 - Suitable for a personal injury law firm website
 - High quality, photorealistic style
+- If the subject mentions a specific product or brand, show that product prominently (e.g., a recognizable bottle, vehicle, device) — product shapes and colors are OK, but avoid rendering readable text or logos
 - Avoid any scenes containing: signs, documents, screens, banners, newspapers, books, clothing with text
 
 CRITICAL: This image must contain ZERO readable text, letters, numbers, or writing of any kind."""
@@ -531,7 +532,7 @@ Your task is to write an informative, engaging blog post based on the following 
 
 4. **meta_title**: Title optimized for search engines. MAXIMUM 60 characters. Do NOT exceed 60.
 
-5. **alt_text**: Alternative text for a featured image. Describe a scene that does NOT contain any text, signs, documents, screens, or readable content. Focus on people, objects, or symbolic imagery without words. Important for SEO and accessibility.
+5. **alt_text**: Alternative text for a featured image. Describe a scene that does NOT contain any text, signs, documents, screens, or readable content. Focus on people, objects, or symbolic imagery without words. IMPORTANT: If the article discusses a specific brand, company, or product (e.g., a vehicle model, medication, consumer product, medical device), prominently feature that product in the scene description (e.g., "a Roundup weedkiller bottle on a garden shelf" or "a Tesla Model 3 on a highway"). The product itself should be visually recognizable but avoid showing readable text or logos. Important for SEO and accessibility.
 
 6. **meta_description**: Description for search engines. MAXIMUM 160 characters. Do NOT exceed 160.
 
@@ -674,7 +675,7 @@ Your task is to write a comprehensive, authoritative blog post for the following
 
 4. **meta_title**: Title optimized for search engines. MAXIMUM 60 characters. Do NOT exceed 60.
 
-5. **alt_text**: Alternative text for a featured image. Describe a scene that does NOT contain any text, signs, documents, screens, or readable content. Focus on people, objects, or symbolic imagery without words. Important for SEO and accessibility.
+5. **alt_text**: Alternative text for a featured image. Describe a scene that does NOT contain any text, signs, documents, screens, or readable content. Focus on people, objects, or symbolic imagery without words. IMPORTANT: If the article discusses a specific brand, company, or product (e.g., a vehicle model, medication, consumer product, medical device), prominently feature that product in the scene description (e.g., "a Roundup weedkiller bottle on a garden shelf" or "a Tesla Model 3 on a highway"). The product itself should be visually recognizable but avoid showing readable text or logos. Important for SEO and accessibility.
 
 6. **meta_description**: Description for search engines. MAXIMUM 160 characters. Do NOT exceed 160.
 

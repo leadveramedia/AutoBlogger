@@ -78,12 +78,18 @@ def _flow_poll_job(job_id):
 
 def _flow_upload_reference_images():
     """Upload spokesperson reference images to useapi.net as Flow assets.
-    Returns list of mediaGenerationId strings (up to 10 for nano-banana-pro)."""
+    Returns dict with 'body', 'face', 'all' ref ID lists, plus 'primary_body' and 'primary_face'.
+    Images with 'body' in the filename are categorized as body refs.
+    Primary refs (always used for clip generation): ref_full_body.png (body), ref_smile.png (face)."""
     if not os.path.exists(SPOKESPERSON_IMAGES_DIR):
         print("    No assets directory found")
-        return []
+        return {'body': [], 'face': [], 'all': [], 'primary_body': None, 'primary_face': None}
 
-    ref_ids = []
+    body_refs = []
+    face_refs = []
+    primary_body = None
+    primary_face = None
+    total = 0
     for filename in sorted(os.listdir(SPOKESPERSON_IMAGES_DIR)):
         ext = os.path.splitext(filename)[1].lower()
         if ext not in ('.jpg', '.jpeg', '.png'):
@@ -110,18 +116,39 @@ def _flow_upload_reference_images():
             result = resp.json()
             media_id = result.get('mediaGenerationId', {}).get('mediaGenerationId')
             if media_id:
-                print(f"    Uploaded {filename} -> {media_id[:40]}...")
-                ref_ids.append(media_id)
+                is_body = 'body' in filename.lower()
+                category = "body" if is_body else "face"
+                print(f"    Uploaded {filename} [{category}] -> {media_id[:40]}...")
+                if is_body:
+                    body_refs.append(media_id)
+                else:
+                    face_refs.append(media_id)
+                total += 1
+
+                # Track primary refs by filename
+                if filename == 'ref_full_body.png':
+                    primary_body = media_id
+                elif filename == 'ref_smile.png':
+                    primary_face = media_id
             else:
                 print(f"    Upload response missing mediaGenerationId: {result}")
         except Exception as e:
             print(f"    Error uploading {filename}: {e}")
 
-        if len(ref_ids) >= 10:
+        if total >= 10:
             break
 
-    print(f"    {len(ref_ids)} reference image(s) uploaded")
-    return ref_ids
+    # Fallback if primary files weren't found
+    if not primary_body and body_refs:
+        primary_body = body_refs[0]
+    if not primary_face and face_refs:
+        primary_face = face_refs[0]
+
+    print(f"    {total} reference image(s) uploaded ({len(body_refs)} body, {len(face_refs)} face)")
+    return {
+        'body': body_refs, 'face': face_refs, 'all': body_refs + face_refs,
+        'primary_body': primary_body, 'primary_face': primary_face,
+    }
 
 
 def _extract_video_from_response(result):
@@ -327,7 +354,6 @@ PRIORITY #1 — FACE MATCHING (above all else):
 - The person in this image must be immediately recognizable as the same individual in the references
 
 FRAMING: Three-quarter body (head to mid-thigh), vertical 9:16 portrait
-BODY TYPE: Curvy, full-figured hourglass build matching the reference images — full bust, defined waist, wider hips. Do NOT make her slimmer or more athletic than the reference.
 EXPRESSION: Natural, confident, looking at camera, as if about to speak
 LIGHTING: Natural, well-lit face, natural casual lighting
 BRIEF STYLING: {appearance_brief}
@@ -427,6 +453,18 @@ def _flow_extend_clip(media_id, prompt):
     }
 
     return _flow_post_with_retry(f'{USEAPI_BASE_URL}/videos/extend', payload, "extend")
+
+
+def _flow_upscale_clip(media_id, resolution='1080p'):
+    """Upscale a video clip to 1080p or 4K via Google Flow.
+    Returns (mediaGenerationId, video_url) or (None, None)."""
+    payload = {
+        'mediaGenerationId': media_id,
+        'resolution': resolution,
+        'async': True,
+    }
+
+    return _flow_post_with_retry(f'{USEAPI_BASE_URL}/videos/upscale', payload, "upscale")
 
 
 def _flow_concatenate(media_ids):
@@ -760,7 +798,8 @@ def generate_tiktok_video_flow(article_data, variant_suffix='', precomputed_prom
 
     # Step 2: Upload reference images
     print("  [Flow] Step 2: Uploading reference images...")
-    ref_ids = _flow_upload_reference_images()
+    ref_data = _flow_upload_reference_images()
+    ref_ids = ref_data['all']  # flat list for scene image generation
     if ref_ids:
         print(f"    Got {len(ref_ids)} reference ID(s)")
 
@@ -795,12 +834,12 @@ def generate_tiktok_video_flow(article_data, variant_suffix='', precomputed_prom
                 video_prompt['initial_prompt'], start_image_id=scene_image_id
             )
         else:
-            # R2V mode: use scene image as extra reference if available
-            all_refs = ref_ids[:]
-            if scene_image_id:
-                all_refs = ref_ids[:2] + [scene_image_id]
+            # R2V mode: fixed primary body ref + face ref + scene image
+            clip_refs = [r for r in [ref_data['primary_body'], ref_data['primary_face'], scene_image_id] if r]
+            if not clip_refs:
+                clip_refs = ref_ids[:3]  # fallback to old behavior
             clip1_id, clip1_url = _flow_generate_clip(
-                video_prompt['initial_prompt'], ref_ids=all_refs
+                video_prompt['initial_prompt'], ref_ids=clip_refs
             )
         if clip1_id:
             break
@@ -831,27 +870,49 @@ def generate_tiktok_video_flow(article_data, variant_suffix='', precomputed_prom
         media_ids.append(ext_id)
         print(f"    Extension {i + 1} ready: {ext_id[:40]}...")
 
-    # Step 7: Concatenate clips (server-side, no fades)
+    # Step 7: Upscale all clips to 1080p (1080x1920 portrait)
+    print(f"  [Flow] Step 7: Upscaling {len(media_ids)} clip(s) to 1080p...")
+    upscaled_ids = []
+    for i, mid in enumerate(media_ids):
+        up_id, up_url = _flow_upscale_clip(mid, resolution='1080p')
+        if up_id:
+            upscaled_ids.append(up_id)
+            print(f"    Clip {i + 1} upscaled to 1080p: {up_id[:40]}...")
+        else:
+            print(f"    Clip {i + 1} upscale failed, using original")
+            upscaled_ids.append(mid)
+
+    # Step 8: Concatenate clips (server-side, no fades)
     video_data = None
-    if len(media_ids) >= 2:
-        print(f"  [Flow] Step 7: Concatenating {len(media_ids)} clips (server)...")
-        video_data = _flow_concatenate(media_ids)
+    if len(upscaled_ids) >= 2:
+        print(f"  [Flow] Step 8: Concatenating {len(upscaled_ids)} clips (server)...")
+        video_data = _flow_concatenate(upscaled_ids)
     else:
-        # Only 1 clip — download directly from URL
-        print("  [Flow] Step 7: Downloading single clip...")
-        try:
-            dl = requests.get(clip1_url, timeout=120)
-            dl.raise_for_status()
-            video_data = dl.content
-        except Exception as e:
-            print(f"    Download failed: {e}")
-            video_data = None
+        # Only 1 clip — already upscaled, download from URL
+        print("  [Flow] Step 8: Downloading single upscaled clip...")
+        # Use the upscaled clip's URL if available
+        up_id, up_url = _flow_upscale_clip(media_ids[0], resolution='1080p')
+        if up_url:
+            try:
+                dl = requests.get(up_url, timeout=120)
+                dl.raise_for_status()
+                video_data = dl.content
+            except Exception as e:
+                print(f"    Download failed: {e}")
+        if not video_data:
+            try:
+                dl = requests.get(clip1_url, timeout=120)
+                dl.raise_for_status()
+                video_data = dl.content
+            except Exception as e:
+                print(f"    Download failed: {e}")
+                video_data = None
 
     if not video_data:
         print("  Failed to get final video data")
         return None
 
-    # Step 6: Save
+    # Step 9: Save
     output_path = os.path.join(VIDEOS_DIR, f"{slug}{variant_suffix}.mp4")
     with open(output_path, 'wb') as f:
         f.write(video_data)
@@ -859,7 +920,7 @@ def generate_tiktok_video_flow(article_data, variant_suffix='', precomputed_prom
     file_size = os.path.getsize(output_path)
     print(f"  Video saved: {output_path} ({file_size / 1024 / 1024:.1f} MB)")
 
-    # Step 8: Overlay hook text
+    # Step 10: Overlay hook text
     hook_text = video_prompt.get('hook_text', '')
     if hook_text:
         print(f"  [Flow] Step 8: Overlaying hook text: {hook_text}")
@@ -876,7 +937,8 @@ def generate_tiktok_video_flow(article_data, variant_suffix='', precomputed_prom
     return output_path
 
 
-def generate_video_prompt(article_data, video_format=None, custom_script=None):
+def generate_video_prompt(article_data, video_format=None, custom_script=None,
+                          custom_setting=None, custom_actions=None):
     """
     Use Gemini to generate a detailed video prompt from article content.
 
@@ -886,6 +948,8 @@ def generate_video_prompt(article_data, video_format=None, custom_script=None):
                      If None, randomly selects one.
         custom_script: Optional pre-written script text. When provided, Gemini only
                       generates visual elements and splits this exact script into Veo prompts.
+        custom_setting: Optional custom setting/location description.
+        custom_actions: Optional custom movements/actions description.
 
     Returns dict with script, appearance, actions, setting, and Veo prompts.
     """
@@ -1019,19 +1083,35 @@ Tone for location-tour:
     # Build custom script override if provided
     custom_script_override = ""
     if custom_script:
+        setting_override = ""
+        if custom_setting:
+            setting_override = f"""
+CUSTOM SETTING (USE THIS EXACT SETTING — do NOT generate your own):
+{custom_setting}
+Use this setting in the "setting" JSON field verbatim, and incorporate it into all Veo prompts as the location/environment.
+"""
+
+        actions_override = ""
+        if custom_actions:
+            actions_override = f"""
+CUSTOM ACTIONS/MOVEMENTS (USE THESE — do NOT generate your own):
+{custom_actions}
+These are high-level actions. Use them in the "actions" JSON field, and distribute them naturally across the 3 Veo prompt segments (initial_prompt, extension 1, extension 2) as visual descriptions.
+"""
+
         custom_script_override = f"""
 
 CUSTOM SCRIPT MODE (CRITICAL OVERRIDE — READ BEFORE ALL OTHER INSTRUCTIONS)
 A pre-written script has been provided. You MUST:
 1. Use this script EXACTLY as written in the "script" JSON field — copy it verbatim, do NOT rewrite, paraphrase, add, or remove any words
 2. Split this exact script into 3 segments for initial_prompt + 2 extension_prompts (follow the DIALOGUE SPLITTING RULE below)
-3. Generate appearance, setting, actions, and hook_text that complement this script's content and tone
+3. Generate appearance and hook_text that complement this script's content and tone
 4. The spoken dialogue in each Veo prompt must use the exact words from the corresponding segment of this script
 5. Ignore all instructions about writing hooks, innuendo, humor style, CTA, informative content, or script length — the script is already final and complete
 
 PRE-WRITTEN SCRIPT (USE VERBATIM):
 {custom_script}
-
+{setting_override}{actions_override}
 For hook_text: Extract the single most shocking or attention-grabbing number, fact, or claim from the script and create a 2-4 word ALL-CAPS overlay text.
 """
 
@@ -1458,7 +1538,7 @@ SPLIT AT SENTENCE BOUNDARIES: Always split the script between complete sentences
 TRANSITION TIMING
 The video is made of 3 clips joined together. Each extension clip's first ~1 second overlaps with the previous clip and gets trimmed.
 
-START-OF-EXTENSION SILENCE: Each extension segment must begin with ~1.5 seconds of SILENT continuation (same pose, natural breathing, subtle expression shift, NO new words spoken) BEFORE the new dialogue starts. This provides buffer for the clip transition.
+START-OF-EXTENSION SILENCE: Each extension segment must begin with ~2 seconds of SILENT continuation (same pose, natural breathing, subtle expression shift, NO new words spoken) BEFORE the new dialogue starts. This provides buffer for the clip transition.
 
 Dialogue in each clip should flow NATURALLY to the end — do NOT artificially cut off dialogue early. Let sentences finish naturally. The start-of-extension buffer handles the transition.
 
@@ -1468,13 +1548,13 @@ Return ONLY valid JSON.
 {{
 "hook_text": "SHORT ALL-CAPS TEXT for screen overlay during first 3 seconds. Ideally 2-3 words, max 4. Must fit on a narrow portrait screen. Bold, shocking, scroll-stopping. Must highlight the most shocking number, fact, or claim. Examples: '$200K PAYOUT', 'FIRED FOR SAFETY', 'YOUR DOCTOR LIED'. Must be different from the spoken hook.",
 "script": "Full spoken script (~40–50 words across ~19 seconds of dialogue). Keep pacing conversational and unhurried — do NOT cram too many words in. Must include specific facts from the article (dollar amounts, company names, what happened). End with a natural casevalue.law mention.",
-"appearance": "Describe Valentina's outfit and look for this video. BODY TYPE: Valentina has a curvy, full-figured hourglass build — full bust, defined waist, wider hips. Always describe her with this body type. NEVER describe her as slim, lean, petite, or athletic-thin. IMPORTANT: Valentina has TWO natural biological legs — NEVER mention a prosthetic, artificial limb, or amputation. STYLE GUIDE — pick ONE category per video and rotate between them: (1) ATHLEISURE: sports bras, ribbed tanks, crop tops, leggings, joggers, sneakers. (2) SEXY/INFLUENCER: bodycon dresses, mini skirts, low-cut tops, off-shoulder tops, heels, thigh-high boots, fitted jeans. (3) SMART CASUAL: blazer over tee or tank, tailored trousers, button-down shirts, midi skirts, loafers, ankle boots. Colors: any — neutrals, earth tones, bold colors, pastels are all fine. Hair: always long red-auburn wavy hair, styling can vary (down, ponytail, half-up, loose braid, swept to one side). Accessories: minimal — small earrings, simple chain necklace, or a watch only. NEVER: costumes, glasses, hats, scarves, prosthetic legs. Must differ from previous outfits listed above — pick a DIFFERENT style category and vary specific pieces, colors, and hair styling.",
+"appearance": "Describe Valentina's outfit and look for this video. IMPORTANT: Valentina has TWO natural biological legs — NEVER mention a prosthetic, artificial limb, or amputation. STYLE GUIDE — pick ONE category per video and rotate between them: (1) ATHLEISURE: sports bras, ribbed tanks, crop tops, leggings, joggers, sneakers. (2) SEXY/INFLUENCER: bodycon dresses, mini skirts, low-cut tops, off-shoulder tops, heels, thigh-high boots, fitted jeans. (3) SMART CASUAL: blazer over tee or tank, tailored trousers, button-down shirts, midi skirts, loafers, ankle boots. Colors: any — neutrals, earth tones, bold colors, pastels are all fine. Hair: always long red-auburn wavy hair, styling can vary (down, ponytail, half-up, loose braid, swept to one side). Accessories: minimal — small earrings, simple chain necklace, or a watch only. NEVER: costumes, glasses, hats, scarves, prosthetic legs. Must differ from previous outfits listed above — pick a DIFFERENT style category and vary specific pieces, colors, and hair styling.",
 "actions": "Highly specific gestures tied to exact words being spoken.",
 "setting": "Visually interesting environment relevant to topic.",
 "initial_prompt": "Veo prompt for first 8 seconds. MUST include the first ~13-17 words of dialogue in quotes. Include full scene, lighting, camera framing, and gestures tied to specific dialogue words.",
 "extension_prompts": [
-"Seconds 8–15: First ~1.5 seconds are SILENT — same pose, natural breathing, subtle expression shift, NO new words spoken (overlap buffer from previous clip). Then at ~1.5 second mark, begin the next sentence of dialogue in exact quotes (~13-17 words). Continue from the EXACT frame where the previous segment ended (same position, lighting, background, framing). Specific gestures tied to specific dialogue words.",
-"Seconds 15–22: First ~1.5 seconds are SILENT — same pose, natural breathing, subtle expression shift, NO new words spoken (overlap buffer from previous clip). Then at ~1.5 second mark, begin the final sentence(s) of dialogue in exact quotes (~13-17 words). Continue from the EXACT frame where the previous segment ended (same position, lighting, background, framing). Closing moment with emotional delivery and strong ending."
+"Seconds 8–15: First ~2 seconds are SILENT — same pose, natural breathing, subtle expression shift, NO new words spoken (overlap buffer from previous clip). Then at ~2 second mark, begin the next sentence of dialogue in exact quotes (~13-17 words). Continue from the EXACT frame where the previous segment ended (same position, lighting, background, framing). Specific gestures tied to specific dialogue words.",
+"Seconds 15–22: First ~2 seconds are SILENT — same pose, natural breathing, subtle expression shift, NO new words spoken (overlap buffer from previous clip). Then at ~2 second mark, begin the final sentence(s) of dialogue in exact quotes (~13-17 words). Continue from the EXACT frame where the previous segment ended (same position, lighting, background, framing). Closing moment with emotional delivery and strong ending."
 ]
 }}
 
@@ -1592,6 +1672,19 @@ Be creative within the style constraints above.
                     prosthetic_re.sub('', p) for p in video_prompt['extension_prompts']
                 ]
 
+            # Post-process: strip subtitle/caption/text-overlay mentions from Veo prompts
+            caption_re = re.compile(
+                r'[^.]*(?:subtitle|caption|text overlay|lower third|title card|on-screen text|text on screen)[^.]*\.\s*',
+                re.IGNORECASE
+            )
+            for field in ('initial_prompt', 'actions', 'setting'):
+                if field in video_prompt and isinstance(video_prompt[field], str):
+                    video_prompt[field] = caption_re.sub('', video_prompt[field])
+            if 'extension_prompts' in video_prompt:
+                video_prompt['extension_prompts'] = [
+                    caption_re.sub('', p) for p in video_prompt['extension_prompts']
+                ]
+
             # Post-process: inject critical rules into every Veo prompt
             appearance_desc = video_prompt.get('appearance', '')
 
@@ -1605,8 +1698,6 @@ Be creative within the style constraints above.
                 "The camera MUST stay in front of her — no profile shots, no behind shots, no over-shoulder angles. "
                 "Valentina has TWO natural biological legs — NO prosthetic leg, NO artificial limb, NO metal leg, NO amputation. "
                 "Both legs are completely natural and human. "
-                "BODY TYPE: Valentina has a curvy, full-figured hourglass build — full bust, defined waist, and wider hips. "
-                "Her body proportions MUST match the full-body reference image. Do NOT make her slimmer, more athletic, or less curvy than the reference. "
                 "ABSOLUTELY NO TEXT IN VIDEO (CRITICAL — HIGHEST PRIORITY): "
                 "The video MUST contain ZERO text of any kind rendered in the video frames. "
                 "NO subtitles, NO captions, NO closed captions, NO text overlays, NO title cards, NO lower thirds, "
@@ -1616,35 +1707,28 @@ Be creative within the style constraints above.
                 "NO phones/cameras in frame. Natural handheld camera feel. "
             )
 
-            # Extension prefix adds face lock + continuity (since extensions can't use reference images)
+            # Extension prefix — minimal to let Veo naturally continue voice and visuals
             ext_prefix = (
                 veo_rules
-                + "FACE LOCK: Same exact person as previous segment — mixed heritage woman, defined cheekbones, "
-                "fair skin with freckles, green eyes, long red-auburn wavy hair, "
-                "curvy hourglass build with full bust, defined waist, and wider hips. "
-                "Face and body MUST match previous clip exactly. "
-                + "SEAMLESS CONTINUITY (CRITICAL): This is a CONTINUATION of the previous clip, not a new scene. "
-                "Start from the EXACT last frame of the previous segment — same body position, same hand placement, "
-                "same head angle, same facial expression, same camera distance, same lighting, same background. "
-                "The transition must be INVISIBLE — a viewer should not be able to tell where one clip ends and the next begins. "
-                "Valentina MUST face the camera at ALL times — NEVER turn her back to camera, NEVER look away for more than a glance. "
-                "NO new objects, poles, props, or structural elements may appear that were not visible in the previous clip. "
-                "The voice MUST remain the SAME — same pitch, same tone, same speaking style as previous segment. "
-                "OVERLAP BUFFER: The first ~1.5 seconds of this clip overlap with the previous clip (first second is trimmed, remaining 0.5s provides margin). "
-                "During these first 1.5 seconds, maintain the SAME pose and expression — NO new words spoken, just natural breathing "
-                "and subtle movement. New dialogue begins AFTER 1.5 seconds. "
-                "Do NOT reset pose, do NOT change camera angle, do NOT shift lighting. Do NOT introduce new objects or scenery. "
+                + "CONTINUE from the previous clip's last frame — same person, same setting, same voice, same camera. "
+                "First ~2 seconds: SILENT, same pose, natural breathing. New dialogue starts AFTER 2 seconds. "
             )
             if appearance_desc:
                 ext_prefix += f"APPEARANCE: {appearance_desc} "
+
+            # No-text reminder placed AFTER dialogue to reinforce the prohibition
+            no_text_suffix = (
+                " CRITICAL REMINDER: The dialogue above is SPOKEN AUDIO ONLY. "
+                "Do NOT render any text, subtitles, or captions in the video frames. NO visual text whatsoever."
+            )
 
             if video_prompt.get('initial_prompt'):
                 initial_prefix = veo_rules
                 if appearance_desc:
                     initial_prefix += f"APPEARANCE: {appearance_desc} "
-                video_prompt['initial_prompt'] = initial_prefix + video_prompt['initial_prompt']
+                video_prompt['initial_prompt'] = initial_prefix + video_prompt['initial_prompt'] + no_text_suffix
             for idx, ext in enumerate(video_prompt.get('extension_prompts', [])):
-                video_prompt['extension_prompts'][idx] = ext_prefix + ext
+                video_prompt['extension_prompts'][idx] = ext_prefix + ext + no_text_suffix
 
             print(f"  Video script generated ({len(video_prompt.get('script', ''))} chars)")
             return video_prompt
@@ -1682,7 +1766,7 @@ def generate_tiktok_video(article_data):
     return generate_tiktok_video_flow(article_data)
 
 
-def generate_three_videos(article_data, custom_script=None):
+def generate_three_videos(article_data, custom_script=None, custom_setting=None, custom_actions=None):
     """
     Generate 3 videos (static, walk-and-talk, location-tour) from the same article
     with different AI-generated prompts. Runs in parallel for efficiency.
@@ -1690,6 +1774,8 @@ def generate_three_videos(article_data, custom_script=None):
     Args:
         article_data: Article data dict (must have 'slug' key)
         custom_script: Optional pre-written script. Passed to generate_video_prompt.
+        custom_setting: Optional custom setting/location. Passed to generate_video_prompt.
+        custom_actions: Optional custom movements/actions. Passed to generate_video_prompt.
 
     Returns list of file paths (only successful videos), or empty list on complete failure.
     """
@@ -1706,7 +1792,8 @@ def generate_three_videos(article_data, custom_script=None):
     prompts = []
     for fmt in formats:
         print(f"    Generating prompt for {fmt}...")
-        prompt = generate_video_prompt(article_data, video_format=fmt, custom_script=custom_script)
+        prompt = generate_video_prompt(article_data, video_format=fmt, custom_script=custom_script,
+                                              custom_setting=custom_setting, custom_actions=custom_actions)
         prompts.append(prompt)
 
     # Filter out None prompts
