@@ -14,6 +14,7 @@ import subprocess
 import tempfile
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor as _TPE
 from pathlib import Path
 from datetime import datetime
 
@@ -46,6 +47,32 @@ def _patched_print(*args, **kwargs):
 
 
 builtins.print = _patched_print
+
+# ── Propagate log queue to ThreadPoolExecutor child threads ──────────────────
+# generate_three_videos() spawns its own ThreadPoolExecutor internally.
+# Patch TPE.submit so child threads inherit the parent's log queue automatically.
+_original_tpe_submit = _TPE.submit
+
+def _propagating_submit(self, fn, *args, **kwargs):
+    parent_tid = threading.current_thread().ident
+    with _tq_lock:
+        parent_q = _thread_log_queues.get(parent_tid)
+    if parent_q is None:
+        return _original_tpe_submit(self, fn, *args, **kwargs)
+
+    def wrapped(*a, **kw):
+        tid = threading.current_thread().ident
+        with _tq_lock:
+            _thread_log_queues[tid] = parent_q
+        try:
+            return fn(*a, **kw)
+        finally:
+            with _tq_lock:
+                _thread_log_queues.pop(tid, None)
+
+    return _original_tpe_submit(self, wrapped, *args, **kwargs)
+
+_TPE.submit = _propagating_submit
 
 # ── Import video module (after print patch so its prints are capturable) ─────
 from auto_post.video import generate_three_videos
@@ -407,7 +434,7 @@ def stream(job_id):
         log_q = job['log_queue']
         while True:
             try:
-                line = log_q.get(timeout=60)
+                line = log_q.get(timeout=15)
             except queue.Empty:
                 yield 'data: [keepalive]\n\n'
                 continue
