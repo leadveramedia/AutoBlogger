@@ -297,7 +297,8 @@ def _flow_post_image_with_retry(url, payload, label="image", return_all=False):
 def _score_face_similarity(candidate_url, ref_image_path):
     """Use Gemini vision to score how similar a candidate face is to the reference.
     Returns a score 1-10, or 0 on failure."""
-    if not GEMINI_API_KEY or not candidate_url:
+    gemini_key = os.environ.get('GEMINI_API_KEY') or GEMINI_API_KEY
+    if not gemini_key or not candidate_url:
         return 0
     try:
         # Download candidate image
@@ -310,7 +311,7 @@ def _score_face_similarity(candidate_url, ref_image_path):
         with open(ref_image_path, 'rb') as f:
             ref_bytes = f.read()
 
-        client = genai.Client(api_key=GEMINI_API_KEY)
+        client = genai.Client(api_key=gemini_key)
         response = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=[
@@ -949,11 +950,12 @@ def generate_video_prompt(article_data, video_format=None, custom_script=None,
 
     Returns dict with script, appearance, actions, setting, and Veo prompts.
     """
-    if not GEMINI_API_KEY:
+    gemini_key = os.environ.get('GEMINI_API_KEY') or GEMINI_API_KEY
+    if not gemini_key:
         print("  Error: GEMINI_API_KEY not set")
         return None
 
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    client = genai.Client(api_key=gemini_key)
 
     title = article_data.get('title', '')
     excerpt = article_data.get('excerpt', '')
