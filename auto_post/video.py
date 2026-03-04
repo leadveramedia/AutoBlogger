@@ -1768,10 +1768,10 @@ def generate_tiktok_video(article_data):
     return generate_tiktok_video_flow(article_data)
 
 
-def generate_three_videos(article_data, custom_script=None, custom_setting=None, custom_actions=None, formats=None):
+def generate_three_videos(article_data, custom_script=None, custom_setting=None, custom_actions=None, formats=None, parallel=True):
     """
     Generate videos (static, walk-and-talk, location-tour) from the same article
-    with different AI-generated prompts. Runs in parallel for efficiency.
+    with different AI-generated prompts.
 
     Args:
         article_data: Article data dict (must have 'slug' key)
@@ -1779,6 +1779,7 @@ def generate_three_videos(article_data, custom_script=None, custom_setting=None,
         custom_setting: Optional custom setting/location. Passed to generate_video_prompt.
         custom_actions: Optional custom movements/actions. Passed to generate_video_prompt.
         formats: Optional list of formats to generate. Defaults to all 3.
+        parallel: If True, generate videos in parallel (default). If False, run sequentially.
 
     Returns list of file paths (only successful videos), or empty list on complete failure.
     """
@@ -1811,24 +1812,41 @@ def generate_three_videos(article_data, custom_script=None, custom_setting=None,
         print("  Failed to generate any prompts, aborting video generation")
         return []
 
-    # Generate videos in parallel using ThreadPoolExecutor
-    print(f"\n  Generating {len(valid_prompts)} videos in parallel...")
+    # Generate videos
     results = []
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        futures = {
-            executor.submit(
-                generate_tiktok_video_flow,
-                article_data,
-                variant_suffix=suffix,
-                precomputed_prompt=prompt
-            ): suffix
-            for suffix, prompt in valid_prompts
-        }
+    if parallel and len(valid_prompts) > 1:
+        print(f"\n  Generating {len(valid_prompts)} videos in parallel...")
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {
+                executor.submit(
+                    generate_tiktok_video_flow,
+                    article_data,
+                    variant_suffix=suffix,
+                    precomputed_prompt=prompt
+                ): suffix
+                for suffix, prompt in valid_prompts
+            }
 
-        for future in as_completed(futures):
-            suffix = futures[future]
+            for future in as_completed(futures):
+                suffix = futures[future]
+                try:
+                    path = future.result()
+                    if path:
+                        results.append(path)
+                        print(f"  ✓ Video {suffix} completed: {path}")
+                    else:
+                        print(f"  ✗ Video {suffix} failed (returned None)")
+                except Exception as e:
+                    print(f"  ✗ Video {suffix} failed with exception: {e}")
+    else:
+        print(f"\n  Generating {len(valid_prompts)} video(s) sequentially...")
+        for suffix, prompt in valid_prompts:
             try:
-                path = future.result()
+                path = generate_tiktok_video_flow(
+                    article_data,
+                    variant_suffix=suffix,
+                    precomputed_prompt=prompt
+                )
                 if path:
                     results.append(path)
                     print(f"  ✓ Video {suffix} completed: {path}")

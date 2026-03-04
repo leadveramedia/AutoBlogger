@@ -140,6 +140,7 @@ def run_job(job_id: str, article_data: dict, script: str, setting: str,
             custom_setting=setting,
             custom_actions=actions,
             formats=formats,
+            parallel=False,
         )
 
         drive_links = []
