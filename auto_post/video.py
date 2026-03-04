@@ -18,7 +18,6 @@ from .config import (GEMINI_API_KEY, VIDEOS_DIR, SPOKESPERSON_IMAGES_DIR,
                      USEAPI_TOKEN, USEAPI_GOOGLE_EMAIL, USEAPI_BASE_URL,
                      VIDEO_SEED_MODE)
 from .content import sanitize_json_control_chars
-from .outfit_tracking import load_outfit_history, save_outfit
 
 # --- Flow (useapi.net) Constants ---
 FLOW_POLL_INTERVAL = 15      # seconds between polling
@@ -923,19 +922,11 @@ def generate_tiktok_video_flow(article_data, variant_suffix='', precomputed_prom
         print(f"  [Flow] Step 8: Overlaying hook text: {hook_text}")
         _overlay_hook_text(output_path, hook_text)
 
-    # Save outfit to history for future variation
-    try:
-        outfit = video_prompt.get('appearance', '')
-        if outfit:
-            save_outfit(outfit)
-    except Exception as e:
-        print(f"  Warning: Could not save outfit to history: {e}")
-
     return output_path
 
 
 def generate_video_prompt(article_data, video_format=None, custom_script=None,
-                          custom_setting=None, custom_actions=None):
+                          custom_setting=None, custom_actions=None, outfit_category=None):
     """
     Use Gemini to generate a detailed video prompt from article content.
 
@@ -963,16 +954,19 @@ def generate_video_prompt(article_data, video_format=None, custom_script=None,
     categories = ', '.join(article_data.get('categories', []))
     keywords = ', '.join(article_data.get('keywords', []))
 
-    # Load recent outfits to avoid repetition
-    previous_outfits = load_outfit_history()
-
-    # Build previous outfits context
+    # Build outfit category directive
     outfit_context = ""
-    if previous_outfits:
-        outfit_context = "\n\nPREVIOUS OUTFITS TO AVOID:\n"
-        for i, outfit in enumerate(previous_outfits, 1):
-            outfit_context += f"{i}. {outfit}\n"
-        outfit_context += "\nDo NOT repeat any of these looks. Create something completely different.\n"
+    if outfit_category in (1, 2, 3):
+        outfit_context = f"""
+
+YOU MUST USE CATEGORY {outfit_category} FOR THIS VIDEO — no exceptions.
+
+CATEGORY 1 — ATHLEISURE: sports bras, ribbed tanks, crop tops, leggings, joggers, sneakers, athletic jackets
+CATEGORY 2 — SEXY/INFLUENCER: bodycon dresses, mini skirts, low-cut tops, off-shoulder tops, crop tops with high-waisted jeans, heels, thigh-high boots, fitted dresses
+CATEGORY 3 — SMART CASUAL: blazer over tee or tank, tailored trousers, button-down shirts (can be tied or unbuttoned), midi skirts, loafers, ankle boots, cardigans
+
+Your "appearance" field MUST describe an outfit from Category {outfit_category} above. Do NOT use any other category.
+"""
 
     # Select video format (or use provided one)
     if video_format is None:
@@ -1593,18 +1587,11 @@ Every video must vary:
 REFERENCE IMAGE OVERRIDE RULE (CRITICAL)
 The reference images show Valentina with one specific look, but you MUST create varied appearances within her style guide.
 
-For the "appearance" field — pick ONE style category per video and ROTATE between them:
-
-CATEGORY 1 — ATHLEISURE: sports bras, ribbed tanks, crop tops, leggings, joggers, sneakers, athletic jackets
-CATEGORY 2 — SEXY/INFLUENCER: bodycon dresses, mini skirts, low-cut tops, off-shoulder tops, crop tops with high-waisted jeans, heels, thigh-high boots, fitted dresses
-CATEGORY 3 — SMART CASUAL: blazer over tee or tank, tailored trousers, button-down shirts (can be tied or unbuttoned), midi skirts, loafers, ankle boots, cardigans
-
 • Colors: ANY — neutrals, earth tones, bold colors (red, cobalt, emerald), pastels, black, white — full range
 • Hair: ALWAYS long red-auburn wavy hair — vary styling (down, ponytail, half-up, loose braid, swept to one side, messy waves)
 • Accessories: minimal — small earrings, simple chain/necklace, maybe a watch. NO glasses, hats, or scarves
 • Footwear: varies by category — sneakers, heels, boots, sandals, loafers
 • NEVER: costumes, themed outfits, glasses, hats, scarves
-• MUST pick a DIFFERENT category than previous outfits — maximize variety across videos
 
 The reference images are for facial features only — NOT for outfit/hair consistency.
 Be creative within the style constraints above.
@@ -1797,13 +1784,21 @@ def generate_three_videos(article_data, custom_script=None, custom_setting=None,
 
     os.makedirs(VIDEOS_DIR, exist_ok=True)
 
-    # Pre-generate prompts sequentially to avoid outfit history race conditions
+    # Each format gets a deterministic outfit category for guaranteed variety
+    FORMAT_CATEGORY_MAP = {
+        'static': 1,         # Athleisure
+        'walk-and-talk': 2,  # Sexy/Influencer
+        'location-tour': 3,  # Smart Casual
+    }
+
     print(f"\n  Pre-generating prompts for {len(formats)} format(s)...")
     prompts = []
     for fmt in formats:
-        print(f"    Generating prompt for {fmt}...")
+        category = FORMAT_CATEGORY_MAP.get(fmt, 1)
+        print(f"    Generating prompt for {fmt} (outfit category {category})...")
         prompt = generate_video_prompt(article_data, video_format=fmt, custom_script=custom_script,
-                                              custom_setting=custom_setting, custom_actions=custom_actions)
+                                              custom_setting=custom_setting, custom_actions=custom_actions,
+                                              outfit_category=category)
         prompts.append(prompt)
 
     # Filter out None prompts
