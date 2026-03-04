@@ -12,7 +12,7 @@ import requests as req
 from google import genai
 from google.genai import types
 
-from .config import GEMINI_API_KEY
+from .config import GEMINI_API_KEY, CALCULATOR_SLUGS, STATE_SLUGS
 
 
 def sanitize_json_control_chars(s):
@@ -461,7 +461,25 @@ IMPORTANT: Return ONLY the JSON object, no additional text. Return empty array f
         return []
 
 
-def generate_article(news_item, all_news, link_database):
+def build_landing_page_database():
+    """Build a text block describing calculator/state landing pages for AI prompts."""
+    lines = ["Available calculator pages on casevalue.law:"]
+    for slug in CALCULATOR_SLUGS:
+        lines.append(f"- https://casevalue.law/calculator/{slug}")
+    lines.append("")
+    lines.append("State-specific calculator pages follow this pattern:")
+    lines.append("  https://casevalue.law/{state-slug}/{practice-area}-calculator")
+    lines.append("Examples:")
+    lines.append("  https://casevalue.law/california/motor-vehicle-accident-calculator")
+    lines.append("  https://casevalue.law/texas/medical-malpractice-calculator")
+    lines.append("  https://casevalue.law/new-york/wrongful-death-calculator")
+    lines.append("")
+    lines.append("Valid state slugs: " + ", ".join(STATE_SLUGS.values()))
+    lines.append("Valid practice area slugs: " + ", ".join(CALCULATOR_SLUGS))
+    return "\n".join(lines)
+
+
+def generate_article(news_item, all_news, link_database, landing_page_database=""):
     """Generate a blog article using Gemini AI."""
     print(f"Generating article based on: {news_item['title'][:60]}...")
 
@@ -489,7 +507,10 @@ Your task is to write an informative, engaging blog post based on the following 
 **--- 3. INTERNAL LINK DATABASE (ONLY use slugs from this list for links) ---**
 {link_database}
 
-**--- 4. OUTPUT REQUIREMENTS ---**
+**--- 4. LANDING PAGE DATABASE (calculator & state pages) ---**
+{landing_page_database}
+
+**--- 5. OUTPUT REQUIREMENTS ---**
 
 1. **slug**: URL-friendly version of the title in kebab-case (e.g., "understanding-texas-statute-of-limitations")
 
@@ -509,7 +530,7 @@ Your task is to write an informative, engaging blog post based on the following 
 
    **SECTION 3 - Steps to Take:** (one full paragraph)
    Create an H2 title about taking action (e.g., "## Protecting Your Rights After a Similar Incident" or "## What to Do If You Face Workplace Discrimination").
-   Practical steps someone should take if they experience this type of event. If relevant, link to existing articles using format [Anchor Text](https://casevalue.law/blog/exact-slug-from-database).
+   Practical steps someone should take if they experience this type of event. If relevant, link to existing articles using format [Anchor Text](https://casevalue.law/blog/exact-slug-from-database). Include a natural inline link to the most relevant calculator page from the LANDING PAGE DATABASE (e.g., "use our [free case calculator](https://casevalue.law/calculator/motor-vehicle-accident) to estimate your claim").
 
    **SECTION 4 - Compensation:** (one full paragraph)
    Create an H2 title about recovery (e.g., "## What Victims Could Recover in Damages" or "## Understanding Settlement Ranges").
@@ -521,7 +542,7 @@ Your task is to write an informative, engaging blog post based on the following 
 
    **SECTION 6 - Get Help:** (one full paragraph)
    Create an H2 title encouraging action (e.g., "## Find Out What Your Case Is Worth" or "## Take the First Step Toward Justice").
-   Strong call-to-action directing readers to use our free case evaluator.
+   Strong call-to-action directing readers to use our free case evaluator. If a specific state is mentioned in the article, link to the state-specific calculator page (e.g., "Try our [Texas motor vehicle accident calculator](https://casevalue.law/texas/motor-vehicle-accident-calculator)"). Otherwise, link to the general calculator.
 
    **Additional Requirements:**
    - H2 headings must be DYNAMIC and SPECIFIC to the article content - never use generic titles
@@ -572,6 +593,7 @@ CRITICAL RULES:
 - HARD CHARACTER LIMITS - NEVER EXCEED: title (max 60), excerpt (max 160), meta_title (max 60), meta_description (max 160). Count each character before output. If over limit, shorten the text.
 - INTERNAL LINKS: ONLY use slugs from the INTERNAL LINK DATABASE. If the database shows "Slug: example-slug", use [text](https://casevalue.law/blog/example-slug). NO invented links. If no matching slug exists, use NO internal links.
 - EXTERNAL AUTHORITY LINKS: Include 2-3 external links to authoritative sources throughout the article. Use government websites (.gov) like OSHA, FDA, NHTSA, EEOC, DOL, CDC; legal databases like Cornell Law Institute (law.cornell.edu); official legal organizations (ABA, state bar associations); or medical/scientific sources (NIH, Mayo Clinic) when relevant. Use standard markdown: [descriptive anchor text](https://full-url). Place them naturally in sections about legal framework, steps to take, or applicable laws. Do NOT link to news articles or competitor law firms. Only use URLs you are confident are real and publicly accessible.
+- LANDING PAGE LINKS: Include 1-2 natural inline links to calculator pages from the LANDING PAGE DATABASE. If the article mentions a specific U.S. state, use the state-specific calculator URL (e.g., https://casevalue.law/texas/motor-vehicle-accident-calculator). Otherwise use the general calculator URL (e.g., https://casevalue.law/calculator/motor-vehicle-accident). Choose the practice area that best matches the article topic. Place these in the "Steps to Take" or "Get Help" sections.
 - Body must have EXACTLY 6 sections, each with a DYNAMIC ## heading specific to the article content. DO NOT use generic headings like "News Summary" or "Liability Analysis".
 """
 
@@ -627,7 +649,7 @@ CRITICAL RULES:
     return None
 
 
-def generate_article_from_title(title, link_database):
+def generate_article_from_title(title, link_database, landing_page_database=""):
     """Generate a comprehensive blog article from a pre-defined title."""
     print(f"Generating article from title: {title[:60]}...")
 
@@ -646,6 +668,9 @@ Your task is to write a comprehensive, authoritative blog post for the following
 
 **--- INTERNAL LINK DATABASE (ONLY use slugs from this list for links) ---**
 {link_database}
+
+**--- LANDING PAGE DATABASE (calculator & state pages) ---**
+{landing_page_database}
 
 **--- OUTPUT REQUIREMENTS ---**
 
@@ -671,7 +696,8 @@ Your task is to write a comprehensive, authoritative blog post for the following
    - Include relevant keywords naturally throughout
    - INTERNAL LINKS: ONLY link to slugs listed in the INTERNAL LINK DATABASE above. Use format: [Anchor Text](https://casevalue.law/blog/exact-slug-from-database). The anchor text should NOT be the full title of the linked article - instead use natural, contextual phrases that flow with the surrounding sentence. Do NOT invent URLs. If no relevant slug exists in the database, include NO internal links.
    - EXTERNAL AUTHORITY LINKS: Include 2-3 external links to authoritative sources throughout the guide. Use government websites (.gov) like OSHA, FDA, NHTSA, EEOC, DOL, CDC; legal databases like Cornell Law Institute (law.cornell.edu); official legal organizations (ABA, state bar associations); or medical/scientific sources (NIH, Mayo Clinic) when relevant. Use standard markdown: [descriptive anchor text](https://full-url). Place them naturally where citing authority adds credibility, especially in sections discussing laws, regulations, or official procedures. Do NOT link to news articles or competitor law firms. Only use URLs you are confident are real and publicly accessible.
-   - End with a strong call-to-action about getting a free case evaluation
+   - LANDING PAGE LINKS: Include 1-2 natural inline links to calculator pages from the LANDING PAGE DATABASE. Choose the practice area that best matches the article topic. If the article is about a specific state, use the state-specific calculator URL (e.g., https://casevalue.law/texas/motor-vehicle-accident-calculator). Otherwise use the general calculator URL (e.g., https://casevalue.law/calculator/motor-vehicle-accident). Place these where readers would naturally want to evaluate their case.
+   - End with a strong call-to-action about getting a free case evaluation, linking to the most relevant calculator page
 
 4. **meta_title**: Title optimized for search engines. MAXIMUM 60 characters. Do NOT exceed 60.
 
@@ -715,6 +741,7 @@ CRITICAL RULES:
 - HARD CHARACTER LIMITS - NEVER EXCEED: title (max 60), excerpt (max 160), meta_title (max 60), meta_description (max 160). Count each character before output. If over limit, shorten the text.
 - MINIMUM WORD COUNT: body_markdown MUST contain at least 2500 words. This is a comprehensive legal guide.
 - This is an EVERGREEN educational guide - do not reference current events or dates unless essential.
+- LANDING PAGE LINKS: Include 1-2 natural inline links to calculator pages from the LANDING PAGE DATABASE. If the article is state-specific, use the state-specific calculator URL. Otherwise use the general calculator URL. Limit to 1-2 landing page links total.
 - Body must have 10-15 sections with ## headings for an authoritative, comprehensive, in-depth guide.
 - Each section should be detailed and informative - aim for 150-250 words per section minimum.
 """

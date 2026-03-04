@@ -173,14 +173,15 @@ def _extract_video_from_response(result):
     return None, None
 
 
-FLOW_CAPTCHA_RETRIES = 3   # retries on 403 captcha failure
 FLOW_GENERATION_RETRIES = 3  # retries on clip generation/extension failure
 
 
 def _flow_post_with_retry(url, payload, label="request"):
-    """POST to a Flow endpoint with retries on 403 captcha failures.
+    """POST to a Flow endpoint with unlimited retries on 403 captcha failures.
     Returns (mediaGenerationId, video_url) or (None, None)."""
-    for attempt in range(FLOW_CAPTCHA_RETRIES):
+    attempt = 0
+    while True:
+        attempt += 1
         try:
             resp = requests.post(url, headers=_flow_headers(), json=payload, timeout=120)
         except requests.RequestException as e:
@@ -203,17 +204,13 @@ def _flow_post_with_retry(url, payload, label="request"):
             return _extract_video_from_response(completed)
 
         if resp.status_code == 403 and 'reCAPTCHA' in resp.text:
-            if attempt < FLOW_CAPTCHA_RETRIES - 1:
-                print(f"    Captcha failed (attempt {attempt + 1}/{FLOW_CAPTCHA_RETRIES}), retrying...")
-                time.sleep(5)
-                continue
-            print(f"    Captcha failed after {FLOW_CAPTCHA_RETRIES} attempts")
-            return None, None
+            delay = 15 if attempt % 5 == 0 else 5
+            print(f"    Captcha failed (attempt {attempt}), retrying in {delay}s...")
+            time.sleep(delay)
+            continue
 
         print(f"    Flow {label} failed: {resp.status_code} {resp.text[:500]}")
         return None, None
-
-    return None, None
 
 
 def _extract_image_from_response(result):
@@ -259,7 +256,9 @@ def _extract_all_images_from_response(result):
 def _flow_post_image_with_retry(url, payload, label="image", return_all=False):
     """POST to a Flow image endpoint with retries on 403 captcha failures.
     If return_all=True, returns list of (id, url) tuples. Otherwise returns single (id, url)."""
-    for attempt in range(FLOW_CAPTCHA_RETRIES):
+    attempt = 0
+    while True:
+        attempt += 1
         try:
             resp = requests.post(url, headers=_flow_headers(), json=payload, timeout=120)
         except requests.RequestException as e:
@@ -286,17 +285,13 @@ def _flow_post_image_with_retry(url, payload, label="image", return_all=False):
             return _extract_image_from_response(completed)
 
         if resp.status_code == 403 and 'reCAPTCHA' in resp.text:
-            if attempt < FLOW_CAPTCHA_RETRIES - 1:
-                print(f"    Captcha failed (attempt {attempt + 1}/{FLOW_CAPTCHA_RETRIES}), retrying...")
-                time.sleep(5)
-                continue
-            print(f"    Captcha failed after {FLOW_CAPTCHA_RETRIES} attempts")
-            return [] if return_all else (None, None)
+            delay = 15 if attempt % 5 == 0 else 5
+            print(f"    Captcha failed (attempt {attempt}), retrying in {delay}s...")
+            time.sleep(delay)
+            continue
 
         print(f"    Flow {label} failed: {resp.status_code} {resp.text[:500]}")
         return [] if return_all else (None, None)
-
-    return [] if return_all else (None, None)
 
 
 def _score_face_similarity(candidate_url, ref_image_path):
@@ -354,6 +349,7 @@ PRIORITY #1 — FACE MATCHING (above all else):
 - The person in this image must be immediately recognizable as the same individual in the references
 
 FRAMING: Three-quarter body (head to mid-thigh), vertical 9:16 portrait
+BODY TYPE: Size 8-10 (US), toned hourglass figure — fit and proportional, NOT overweight, NOT plus-size, NOT skinny. Must match the full-body reference image.
 EXPRESSION: Natural, confident, looking at camera, as if about to speak
 LIGHTING: Natural, well-lit face, natural casual lighting
 BRIEF STYLING: {appearance_brief}
@@ -1533,7 +1529,7 @@ Unnatural human
 DIALOGUE SPLITTING RULE (CRITICAL)
 The full script MUST be split across the initial_prompt and exactly 2 extension_prompts. Each prompt MUST contain its exact dialogue portion in "quotes". If any prompt has no quoted dialogue, the video will have silent dead air — this is a failure.
 
-SPLIT AT SENTENCE BOUNDARIES: Always split the script between complete sentences — NEVER split mid-sentence. Each segment should contain 1-3 complete sentences (~13-17 words). The dialogue in each segment must be self-contained and start at a sentence beginning.
+SPLIT AT SENTENCE BOUNDARIES: Always split the script between complete sentences — NEVER split mid-sentence. Segment word counts: initial prompt ~17-18 words, first extension ~13-15 words, FINAL extension ~12 words max. The last segment is shortest because dialogue must complete before the clip ends. Front-load the meatier content in the first two segments.
 
 TRANSITION TIMING
 The video is made of 3 clips joined together. Each extension clip's first ~1 second overlaps with the previous clip and gets trimmed.
@@ -1547,14 +1543,14 @@ Return ONLY valid JSON.
 
 {{
 "hook_text": "SHORT ALL-CAPS TEXT for screen overlay during first 3 seconds. Ideally 2-3 words, max 4. Must fit on a narrow portrait screen. Bold, shocking, scroll-stopping. Must highlight the most shocking number, fact, or claim. Examples: '$200K PAYOUT', 'FIRED FOR SAFETY', 'YOUR DOCTOR LIED'. Must be different from the spoken hook.",
-"script": "Full spoken script (~40–50 words across ~19 seconds of dialogue). Keep pacing conversational and unhurried — do NOT cram too many words in. Must include specific facts from the article (dollar amounts, company names, what happened). End with a natural casevalue.law mention.",
-"appearance": "Describe Valentina's outfit and look for this video. IMPORTANT: Valentina has TWO natural biological legs — NEVER mention a prosthetic, artificial limb, or amputation. STYLE GUIDE — pick ONE category per video and rotate between them: (1) ATHLEISURE: sports bras, ribbed tanks, crop tops, leggings, joggers, sneakers. (2) SEXY/INFLUENCER: bodycon dresses, mini skirts, low-cut tops, off-shoulder tops, heels, thigh-high boots, fitted jeans. (3) SMART CASUAL: blazer over tee or tank, tailored trousers, button-down shirts, midi skirts, loafers, ankle boots. Colors: any — neutrals, earth tones, bold colors, pastels are all fine. Hair: always long red-auburn wavy hair, styling can vary (down, ponytail, half-up, loose braid, swept to one side). Accessories: minimal — small earrings, simple chain necklace, or a watch only. NEVER: costumes, glasses, hats, scarves, prosthetic legs. Must differ from previous outfits listed above — pick a DIFFERENT style category and vary specific pieces, colors, and hair styling.",
+"script": "Full spoken script (~42–45 words across ~18 seconds of dialogue). Keep pacing conversational and unhurried — do NOT cram too many words in. Must include specific facts from the article (dollar amounts, company names, what happened). End with a natural casevalue.law mention.",
+"appearance": "Describe Valentina's outfit and look for this video. BODY TYPE (MANDATORY — include verbatim in every appearance description): Valentina is 5'6, size 8-10 (US), with a toned hourglass figure — she is fit and proportional, NOT overweight, NOT plus-size, NOT heavy-set, NOT skinny. Think fit Instagram influencer body type. Always include 'size 8-10 toned hourglass figure' in the appearance description. IMPORTANT: Valentina has TWO natural biological legs — NEVER mention a prosthetic, artificial limb, or amputation. STYLE GUIDE — pick ONE category per video and rotate between them: (1) ATHLEISURE: sports bras, ribbed tanks, crop tops, leggings, joggers, sneakers. (2) SEXY/INFLUENCER: bodycon dresses, mini skirts, low-cut tops, off-shoulder tops, heels, thigh-high boots, fitted jeans. (3) SMART CASUAL: blazer over tee or tank, tailored trousers, button-down shirts, midi skirts, loafers, ankle boots. Colors: any — neutrals, earth tones, bold colors, pastels are all fine. Hair: always long red-auburn wavy hair, styling can vary (down, ponytail, half-up, loose braid, swept to one side). Accessories: minimal — small earrings, simple chain necklace, or a watch only. NEVER: costumes, glasses, hats, scarves, prosthetic legs. Must differ from previous outfits listed above — pick a DIFFERENT style category and vary specific pieces, colors, and hair styling.",
 "actions": "Highly specific gestures tied to exact words being spoken.",
 "setting": "Visually interesting environment relevant to topic.",
-"initial_prompt": "Veo prompt for first 8 seconds. MUST include the first ~13-17 words of dialogue in quotes. Include full scene, lighting, camera framing, and gestures tied to specific dialogue words.",
+"initial_prompt": "Veo prompt for first 8 seconds. MUST include the first ~17-18 words of dialogue in quotes. Include full scene, lighting, camera framing, and gestures tied to specific dialogue words.",
 "extension_prompts": [
-"Seconds 8–15: First ~2 seconds are SILENT — same pose, natural breathing, subtle expression shift, NO new words spoken (overlap buffer from previous clip). Then at ~2 second mark, begin the next sentence of dialogue in exact quotes (~13-17 words). Continue from the EXACT frame where the previous segment ended (same position, lighting, background, framing). Specific gestures tied to specific dialogue words.",
-"Seconds 15–22: First ~2 seconds are SILENT — same pose, natural breathing, subtle expression shift, NO new words spoken (overlap buffer from previous clip). Then at ~2 second mark, begin the final sentence(s) of dialogue in exact quotes (~13-17 words). Continue from the EXACT frame where the previous segment ended (same position, lighting, background, framing). Closing moment with emotional delivery and strong ending."
+"Seconds 8–15: First ~2 seconds are SILENT — same pose, natural breathing, subtle expression shift, NO new words spoken (overlap buffer from previous clip). Then at ~2 second mark, begin the next sentence of dialogue in exact quotes (~13-15 words). Continue from the EXACT frame where the previous segment ended (same position, lighting, background, framing). Specific gestures tied to specific dialogue words.",
+"Seconds 15–22: First ~2 seconds are SILENT — same pose, natural breathing, subtle expression shift, NO new words spoken (overlap buffer from previous clip). Then at ~2 second mark, begin the final sentence(s) of dialogue in exact quotes (~12 words MAX — this is the LAST clip, dialogue MUST complete before clip ends). Continue from the EXACT frame where the previous segment ended (same position, lighting, background, framing). Keep it short and punchy with emotional delivery."
 ]
 }}
 
@@ -1698,6 +1694,9 @@ Be creative within the style constraints above.
                 "The camera MUST stay in front of her — no profile shots, no behind shots, no over-shoulder angles. "
                 "Valentina has TWO natural biological legs — NO prosthetic leg, NO artificial limb, NO metal leg, NO amputation. "
                 "Both legs are completely natural and human. "
+                "BODY TYPE: Valentina is size 8-10 (US), toned hourglass figure — fit and proportional. "
+                "She is NOT overweight, NOT plus-size, NOT heavy-set, and NOT skinny. Think fit Instagram influencer. "
+                "Her body MUST match the full-body reference image exactly. "
                 "ABSOLUTELY NO TEXT IN VIDEO (CRITICAL — HIGHEST PRIORITY): "
                 "The video MUST contain ZERO text of any kind rendered in the video frames. "
                 "NO subtitles, NO captions, NO closed captions, NO text overlays, NO title cards, NO lower thirds, "
@@ -1710,7 +1709,8 @@ Be creative within the style constraints above.
             # Extension prefix — minimal to let Veo naturally continue voice and visuals
             ext_prefix = (
                 veo_rules
-                + "CONTINUE from the previous clip's last frame — same person, same setting, same voice, same camera. "
+                + "CONTINUE from the previous clip's last frame — same person, same body type, same setting, same voice, same camera. "
+                "The woman's body MUST remain the same size and proportions as the previous clip — NO weight changes between clips. "
                 "First ~2 seconds: SILENT, same pose, natural breathing. New dialogue starts AFTER 2 seconds. "
             )
             if appearance_desc:
@@ -1766,9 +1766,9 @@ def generate_tiktok_video(article_data):
     return generate_tiktok_video_flow(article_data)
 
 
-def generate_three_videos(article_data, custom_script=None, custom_setting=None, custom_actions=None):
+def generate_three_videos(article_data, custom_script=None, custom_setting=None, custom_actions=None, formats=None):
     """
-    Generate 3 videos (static, walk-and-talk, location-tour) from the same article
+    Generate videos (static, walk-and-talk, location-tour) from the same article
     with different AI-generated prompts. Runs in parallel for efficiency.
 
     Args:
@@ -1776,19 +1776,26 @@ def generate_three_videos(article_data, custom_script=None, custom_setting=None,
         custom_script: Optional pre-written script. Passed to generate_video_prompt.
         custom_setting: Optional custom setting/location. Passed to generate_video_prompt.
         custom_actions: Optional custom movements/actions. Passed to generate_video_prompt.
+        formats: Optional list of formats to generate. Defaults to all 3.
 
     Returns list of file paths (only successful videos), or empty list on complete failure.
     """
     slug = article_data.get('slug', 'untitled')
-    print(f"\n--- Generating 3 TikTok Video Variants for: {slug} ---")
+
+    all_formats = ['static', 'walk-and-talk', 'location-tour']
+    all_suffixes = ['_v1', '_v2', '_v3']
+    if formats is None:
+        formats = all_formats
+    pairs = [(s, f) for s, f in zip(all_suffixes, all_formats) if f in formats]
+    suffixes = [s for s, _ in pairs]
+    formats = [f for _, f in pairs]
+
+    print(f"\n--- Generating {len(formats)} TikTok Video Variant(s) for: {slug} ---")
 
     os.makedirs(VIDEOS_DIR, exist_ok=True)
 
-    formats = ['static', 'walk-and-talk', 'location-tour']
-    suffixes = ['_v1', '_v2', '_v3']
-
     # Pre-generate prompts sequentially to avoid outfit history race conditions
-    print("\n  Pre-generating prompts for all 3 formats...")
+    print(f"\n  Pre-generating prompts for {len(formats)} format(s)...")
     prompts = []
     for fmt in formats:
         print(f"    Generating prompt for {fmt}...")

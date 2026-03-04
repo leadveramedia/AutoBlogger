@@ -182,6 +182,81 @@ VALID_CATEGORIES = [
     "case-studies"
 ]
 
+# --- LANDING PAGE CONFIGURATION ---
+# Practice area calculator slugs (matches sitemap at casevalue.law)
+CALCULATOR_SLUGS = [
+    "motor-vehicle-accident",
+    "medical-malpractice",
+    "premises-liability",
+    "product-liability",
+    "wrongful-death",
+    "dog-bite",
+    "wrongful-termination",
+    "wage-and-hour",
+    "class-action",
+    "insurance-bad-faith",
+    "disability-denial",
+    "professional-malpractice",
+    "civil-rights",
+    "intellectual-property",
+    "workers-compensation",
+]
+
+# State name to URL slug mapping (all 51 states/territories in sitemap)
+STATE_SLUGS = {
+    "Alabama": "alabama",
+    "Alaska": "alaska",
+    "Arizona": "arizona",
+    "Arkansas": "arkansas",
+    "California": "california",
+    "Colorado": "colorado",
+    "Connecticut": "connecticut",
+    "Delaware": "delaware",
+    "Washington DC": "washington-dc",
+    "Florida": "florida",
+    "Georgia": "georgia",
+    "Hawaii": "hawaii",
+    "Idaho": "idaho",
+    "Illinois": "illinois",
+    "Indiana": "indiana",
+    "Iowa": "iowa",
+    "Kansas": "kansas",
+    "Kentucky": "kentucky",
+    "Louisiana": "louisiana",
+    "Maine": "maine",
+    "Maryland": "maryland",
+    "Massachusetts": "massachusetts",
+    "Michigan": "michigan",
+    "Minnesota": "minnesota",
+    "Mississippi": "mississippi",
+    "Missouri": "missouri",
+    "Montana": "montana",
+    "Nebraska": "nebraska",
+    "Nevada": "nevada",
+    "New Hampshire": "new-hampshire",
+    "New Jersey": "new-jersey",
+    "New Mexico": "new-mexico",
+    "New York": "new-york",
+    "North Carolina": "north-carolina",
+    "North Dakota": "north-dakota",
+    "Ohio": "ohio",
+    "Oklahoma": "oklahoma",
+    "Oregon": "oregon",
+    "Pennsylvania": "pennsylvania",
+    "Rhode Island": "rhode-island",
+    "South Carolina": "south-carolina",
+    "South Dakota": "south-dakota",
+    "Tennessee": "tennessee",
+    "Texas": "texas",
+    "Utah": "utah",
+    "Vermont": "vermont",
+    "Virginia": "virginia",
+    "Washington": "washington",
+    "West Virginia": "west-virginia",
+    "Wisconsin": "wisconsin",
+    "Wyoming": "wyoming",
+}
+
 # --- PRACTICE AREA KEYWORDS (for filtering general news sources) ---
 # Articles from general news must contain at least one keyword to be included
 PRACTICE_AREA_KEYWORDS = [

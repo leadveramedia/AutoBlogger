@@ -32,6 +32,7 @@ from auto_post import (
     add_used_topic,
     generate_three_videos,
 )
+from auto_post.content import build_landing_page_database
 from auto_post.config import GEMINI_API_KEY, SANITY_PROJECT_ID, SANITY_TOKEN, ENABLE_VIDEO_GENERATION
 
 
@@ -106,9 +107,10 @@ def main():
         print(f"  {i}. {article['title'][:60]}...")
         print(f"     Source: {article['source']} | Category: {article['category']}")
 
-    # Step 3: Get Internal Links
-    print("\n--- Step 3: Fetching Internal Links ---")
+    # Step 3: Get Internal Links & Landing Pages
+    print("\n--- Step 3: Fetching Internal Links & Landing Pages ---")
     link_database = get_existing_posts()
+    landing_page_database = build_landing_page_database()
 
     # Step 4 & 5: Generate and Post Each Article
     success_count = 0
@@ -122,7 +124,7 @@ def main():
 
         # Step 4: Generate Article
         print(f"\n--- Step 4.{i}: Generating Article ---")
-        generated_article = generate_article(selected_article, all_news, link_database)
+        generated_article = generate_article(selected_article, all_news, link_database, landing_page_database)
 
         if not generated_article:
             print(f"Article {i} generation failed. Skipping.")
@@ -186,7 +188,7 @@ def main():
         print(f"\n--- Step 6: Generating Article from Title ---")
         print(f"Title: {current_title[:60]}...")
 
-        title_article = generate_article_from_title(current_title, link_database)
+        title_article = generate_article_from_title(current_title, link_database, landing_page_database)
 
         if title_article:
             # Display generated content summary
