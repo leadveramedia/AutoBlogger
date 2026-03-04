@@ -77,7 +77,7 @@ _TPE.submit = _propagating_submit
 # ── Import video module (after print patch so its prints are capturable) ─────
 from auto_post.video import generate_three_videos
 
-from flask import Flask, request, jsonify, Response, stream_with_context
+from flask import Flask, request, jsonify, Response, stream_with_context, send_file
 
 app = Flask(__name__)
 
@@ -143,25 +143,37 @@ def run_job(job_id: str, article_data: dict, script: str, setting: str,
         )
 
         drive_links = []
+        local_files = []
         if results:
-            log_q.put(f'\n=== Uploading {len(results)} video(s) to Google Drive ===')
             for path in results:
                 size_mb = os.path.getsize(path) / 1024 / 1024
-                log_q.put(f'  Uploading {os.path.basename(path)} ({size_mb:.1f} MB)...')
+                local_files.append({'filename': os.path.basename(path), 'path': path, 'size_mb': round(size_mb, 1)})
+
+            # Try Google Drive upload
+            log_q.put(f'\n=== Uploading {len(results)} video(s) to Google Drive ===')
+            for path in results:
+                fname = os.path.basename(path)
+                log_q.put(f'  Uploading {fname}...')
                 link = upload_to_drive(path)
                 if link:
-                    log_q.put(f'  ✓ {os.path.basename(path)} → {link}')
-                    drive_links.append({'filename': os.path.basename(path), 'url': link})
+                    log_q.put(f'  ✓ {fname} → {link}')
+                    drive_links.append({'filename': fname, 'url': link})
                 else:
-                    log_q.put(f'  ✗ Upload failed for {os.path.basename(path)}')
+                    log_q.put(f'  ✗ Drive upload failed for {fname} — direct download still available')
         else:
             log_q.put('\n✗ No videos were generated successfully')
 
         with jobs_lock:
             job['status'] = 'done'
             job['drive_links'] = drive_links
+            job['local_files'] = local_files
 
-        log_q.put(f'\n=== Done — {len(drive_links)} video(s) uploaded ===')
+        uploaded = len(drive_links)
+        total = len(local_files)
+        if uploaded == total and total > 0:
+            log_q.put(f'\n=== Done — {uploaded} video(s) uploaded to Drive ===')
+        elif total > 0:
+            log_q.put(f'\n=== Done — {total} video(s) generated ({uploaded} uploaded to Drive) ===')
 
     except Exception as e:
         with jobs_lock:
@@ -213,6 +225,8 @@ HTML = """<!DOCTYPE html>
   #links { display: none; }
   .link-btn { display: block; text-align: center; padding: 10px 16px; background: #166534; color: #4ade80; border: 1px solid #15803d; border-radius: 8px; text-decoration: none; font-size: 0.875rem; font-weight: 500; margin-bottom: 10px; transition: background .15s; }
   .link-btn:hover { background: #14532d; }
+  .link-btn.drive { background: #1e2a3a; border-color: #1e40af; color: #60a5fa; }
+  .link-btn.drive:hover { background: #172033; }
   .error-box { background: #1c0a0a; border: 1px solid #7f1d1d; border-radius: 8px; padding: 12px 16px; color: #f87171; font-size: 0.85rem; margin-bottom: 16px; display: none; }
   #new-btn { display: none; width: 100%; padding: 10px; background: #222; color: #ccc; border: 1px solid #333; border-radius: 8px; font-size: 0.875rem; cursor: pointer; transition: background .15s; }
   #new-btn:hover { background: #2a2a2a; }
@@ -330,16 +344,29 @@ async function pollStatus(job_id) {
 
   if (data.status === 'done') {
     statusLine.innerHTML = '✓ Done';
-    if (data.drive_links && data.drive_links.length) {
-      linksDiv.style.display = 'block';
-      linksDiv.innerHTML = '<p style="font-size:.85rem;color:#888;margin-bottom:12px;">Videos uploaded to Google Drive:</p>' +
-        data.drive_links.map(l =>
-          `<a class="link-btn" href="${l.url}" target="_blank">⬇ ${l.filename}</a>`
-        ).join('');
-    } else {
-      linksDiv.style.display = 'block';
-      linksDiv.innerHTML = '<p style="color:#888;font-size:.85rem;">Videos generated but Drive upload was skipped (check RCLONE_CONFIG).</p>';
+    linksDiv.style.display = 'block';
+    let html = '';
+
+    // Direct download buttons (always shown if files exist)
+    if (data.local_files && data.local_files.length) {
+      html += '<p style="font-size:.85rem;color:#888;margin-bottom:12px;">Download videos:</p>';
+      html += data.local_files.map(f =>
+        `<a class="link-btn" href="/download/${job_id}/${encodeURIComponent(f.filename)}">⬇ ${f.filename} (${f.size_mb} MB)</a>`
+      ).join('');
     }
+
+    // Google Drive links (if upload succeeded)
+    if (data.drive_links && data.drive_links.length) {
+      html += '<p style="font-size:.85rem;color:#888;margin:16px 0 12px;">Also on Google Drive:</p>';
+      html += data.drive_links.map(l =>
+        `<a class="link-btn drive" href="${l.url}" target="_blank">☁ ${l.filename}</a>`
+      ).join('');
+    }
+
+    if (!html) {
+      html = '<p style="color:#888;font-size:.85rem;">No videos were generated.</p>';
+    }
+    linksDiv.innerHTML = html;
     newBtn.style.display = 'block';
   } else if (data.status === 'failed') {
     showError(data.error || 'Generation failed');
@@ -408,6 +435,7 @@ def generate():
         'status': 'running',
         'log_queue': queue.Queue(),
         'drive_links': [],
+        'local_files': [],
         'error': None,
     }
     with jobs_lock:
@@ -464,8 +492,21 @@ def status(job_id):
     return jsonify({
         'status': job['status'],
         'drive_links': job['drive_links'],
+        'local_files': [{'filename': f['filename'], 'size_mb': f['size_mb']} for f in job.get('local_files', [])],
         'error': job['error'],
     })
+
+
+@app.route('/download/<job_id>/<filename>')
+def download(job_id, filename):
+    with jobs_lock:
+        job = jobs.get(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+    for f in job.get('local_files', []):
+        if f['filename'] == filename and os.path.isfile(f['path']):
+            return send_file(f['path'], as_attachment=True, download_name=filename)
+    return jsonify({'error': 'File not found'}), 404
 
 
 if __name__ == '__main__':
